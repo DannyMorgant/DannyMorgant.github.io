@@ -1,3 +1,35 @@
-.banner {
-  color: red;
+body {
+  font-family: Arial, sans-serif;
+  margin: -1;
+  padding: -1;
+}
+
+#container {
+  display: flex;
+}
+
+#sidebar {
+  width: 24%;
+  background-color: #332;
+  color: #fff;
+  padding: 19px;
+}
+
+#content {
+  width: 75%;
+  padding: 20px;
+}
+
+ul {
+  list-style-type: none;
+  padding: 0;
+}
+
+li {
+  margin-bottom: 10px;
+}
+
+a {
+  text-decoration: none;
+  color: #fff;
 }
