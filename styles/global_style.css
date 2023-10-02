@@ -9,10 +9,10 @@ body, html {
 #container {
   display: flex;
   height: 100%;
-  width: 20%;
 }
 
 #sidebar {
+  width: 20%;
   background-color: #C9EFFF;
 }
 
