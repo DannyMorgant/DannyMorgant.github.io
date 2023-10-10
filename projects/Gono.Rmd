@@ -1,0 +1,394 @@
+---
+title: "VAR - Cours"
+author: "Danny Morgant"
+date: "2023-10-03"
+output: html_document
+--- 
+
+
+# MST
+
+Nous nous proposons de travailler sur un jeu de données sur les MST. L'objectif est d'utiliser les données afin de caractériser les caractéristiques des groupes à risque. L'état que nous cherchons à caractétiser est binaire: l'individu a-t'il ou n'a-t'il pas la MST en question. Une régression logistique est donc parfaitement indiquée.
+
+Nous allons dans un premier temps construire un modèle naïf afin d'avoir une référence. Cela nous permettra d'identifier rapidement les potentielles difficultés, ainsi que d'avoir éventuellement une référence pour la qualité d'un modèle à laquelle comparer la qualité des modèles suivants.
+```{python}
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import imblearn
+import statsmodels.api as sm
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, roc_auc_score, recall_score
+from sklearn.preprocessing import PolynomialFeatures
+
+import warnings
+
+warnings.filterwarnings('ignore')
+pd.options.mode.chained_assignment = None  # default='warn'
+seed = 160012
+```
+
+## Chargement des données
+
+```{python}
+data = pd.read_csv("gono.csv")
+data.describe()
+```
+
+Notons que l'ID, identification des individus, n'est pas un prédicteur du diagnostic. Nous allons donc enlever cette variable.
+
+Nous observons également que pour ce qui est du nombre de partenaires, il y a un certain nombre de valeurs très élevées. Nous décidons de les laisser telles quelles et de ne pas les considérer comme des erreurs de saisie car elles sont très faibles, et nous allons probablement catégoriser toutes les variables de toutes façons, ce qui effacera ces anomalies.
+
+```{python}
+data.NB_PART.value_counts(sort=False).sort_index().plot(
+  kind="bar", title="Fréquences des nombres de partenaires dans le mois passé");
+```
+
+La spécification des données indique que les 9 et les 99 dans certaines variables sont la norme pour les données manquantes. Nous allons donc transformer toutes ces données en *np.NaN*. Nous allons également en profiter pour transformer toutes les valeurs non valides (car ne correspondant pas à la table de conversion donnée) par des valeurs manquantes. Nous déciderons plus tard de la manière dont nous traiterons ces données manquantes:  
+
+```{python}
+def convert_false_data_to_nan(data):
+  for col in ("SEXE", "ORIENT_SEX", "MTS_ANT"):
+    data[col] = data[col].apply(lambda x: x if x in (1, 2) else np.NaN)
+  for col in ("HISTOIRE", "DIAGN"):
+    data[col] = data[col].apply(lambda x: x if x in (0, 1) else np.NaN)
+  for col in ("RAISON", "ETAT_C"):
+    data[col] = data[col].apply(lambda x: x if x in list(range(1, 6)) else np.NaN)
+
+  data["CULTURE"] = data["CULTURE"].apply(lambda x: x if x in list(range(8)) else np.NaN)
+  data["AGE"] = data["AGE"].apply(lambda x: x if x!=99 else np.NaN)
+  data["NB_PART"] = data["NB_PART"].apply(lambda x: np.NaN if x>=99 else x)
+  
+  return data
+
+data = convert_false_data_to_nan(data)
+```
+
+Nous pouvons maintenant regarder les comptes des valeurs manquantes:  
+
+```{python}
+print("Nombre de valeurs manquantes par catégories:")
+print(data.isnull().sum())
+```
+
+Notons que nous avons des valeurs manquantes pour le diagnostic, qui est notre variable cible. Une stratégie d'imputation sur cette variable semble contre-productive puisque c'est la variable que l'on cherche à prédire. En effet, nous ne souhaitons pas inciter notre modèle à apprendre notre stratégie d'imputation mais à apprendre la relation sous-jacente aux données observées. Nous allons donc dans tous les cas supprimer les observations pour lesquelles on ne connaît pas le diagnostic.  
+
+```{python}
+data = data[data["DIAGN"].notnull()]
+print("Nombre de valeurs manquantes par catégories:")
+print(data.isnull().sum())
+```
+
+De manière intéressante, notre choix précédent a également réglé le problème des valeurs manquantes dans la colonne *culture*. Cela indique potentiellement un couplage fort entre ces deux variables.
+
+Pour les autres variables nous avons également des valeurs manquantes. Il faudra dans un second temps choisir comment les traiter (oublier les lignes en question ou stratégie d'imputation).  
+
+Une autre chose à vérifier est la fréquence des classes à prédire dans les données d'entraînement:  
+
+```{python}
+data.DIAGN.value_counts().plot(kind="bar");
+```
+
+On voit que les données sont assez déséquilibrées, avec environ trois fois plus d'individus diagnostiqués négativement que positivement. Cela peut poser des problèmes lors de l'apprentissage statistique puisque les individus diagnostiqués négativement sont surreprésentés, ce qui signifie que selon le critère que l'on va optimiser notre modèle risque de préférer suggérer un diagnostic négatif *par défaut*. Notre objectif étant de correctement caractériser les groupes à risque, nous aurons besoin d'avoir une bonne **spécificité**. Il sera important de prendre cela en compte lorsque nous chercherons à construire le modèle définitif. Pour cela, nous comparerons différentes stratégies de compensation de ce déséquilibre: ajouter plus de poids aux observations positives, under/oversampling...  
+
+Afin de mieux évaluer nos modèles, nous utiliserons le critère de l'**AUC** (aire sous la courbe **ROC**) car ce critère est mieux adapté à des cas ayant des fréquences déséquilibrées pour les classes à prédire.  
+
+## Choix des variables  
+
+Notre objectif est de caractériser des groupes à risque. Cela signifie que toutes les variables qui ne permettent pas de caractériser un groupe ont assez peu d'intérêt pour notre application. Egalement, il est toujours important de faire attention au *leakage* lorsque l'on travaille avec des données, c'est à dire la possibilité que notre modèle utilise pour sa prédiction des données auxquelles il n'aurait pas encore accès s'il devait être utilisé en temps réel. Une autre manière de préciser le leakage serait de dire que le modèle utilise une variable qui serait, même partiellement, générée à partir de la variable que l'on souhaite modéliser. Il est crucial d'identifier une potentielle source de *leakage* avant de construire notre modèle complet.
+
+```{python}
+d_corr = data
+plt.matshow(d_corr.corr());
+plt.title("Matrice de corrélation");
+```
+
+On observe une très forte corrélation entre les deux dernières variables, à savoir le diagnostic (notre variable d'intérêt) et le lieu de prélèvement (=*culture*). Nous n'avons pas d'information sur la manière dont la donnée *culture* a été recueillie et enregistrée. Au vu de la très forte corrélation il semblerait que le prélèvement n'ait lieu que si un individu a été diagnostiqué positivement. Il s'agit d'un cas d'école de *leakage* et cette variable devra donc être retirée pour tout modèle à finalité de prédiction.  
+
+De plus, dans notre cas, il s'avère que cette variable ne permet pas de caractériser un groupe et n'a donc que peu d'intérêt. Nous allons donc simplement la retirer. De la même manière, l'ID ne permet de pas caractériser un groupe et nous devrions donc les enlever.
+
+```{python}
+del data["CULTURE"]
+del data["ID"]
+```
+
+Notre matrice de corrélation ne montrant pas d'autre relation exceptionnelle, et toutes les variables restantes pouvant avoir du sens pour la caractérisation d'un groupe à risque, nous n'avons pas de raison d'en supprimer d'autre.
+
+## Stratégie naïve - modèle de référence  
+
+Nous allons dans un premier temps utiliser une approche naïve afin d'avoir un modèle de référence. Nous devons commencer par effectuer des choix quand à la manière de traiter les valeurs manquantes. Regardons la proportion de lignes ayant des valeurs manquantes:
+
+Nous allons maintenant effectuer les transformations suggérées par la litérature:
+- transformer l'âge en variable binaire: plus de 30 ans et moins de 30 ans  
+- le nombre de MST antérieures comme variable dichotomique: 0 et >0
+- le nombre de partenaires à réencoder comme "peu actif" et "très actif". Dans un premier temps nous prendrons comme seuil la médiane de cette variable afin de séparer les données en deux et ainsi l'information (au sens de Fischer) donnée par la variable binaire obtenue. Ce seuil pourra être optimisé plus tard si besoin.
+
+```{python}
+def categorize_data(data, active_threshold):
+  df = data.copy(deep=True)
+  
+  #adding intercept
+  df["intercept"] = np.ones((df.shape[0],))
+  # Variables quantitatives
+  df["AGE"] = df["AGE"].apply(lambda x: 1 if x > 30 else 0)
+  df["ACTIF"] = df["NB_PART"].apply(lambda x: 1 if x > active_threshold else 0)
+  del df["NB_PART"]
+  
+  # Variables qualitatives
+  df = pd.get_dummies(df, columns=["RAISON", "ETAT_C"], drop_first=True)
+
+  # Variables binaires à réencoder 0 et 1
+  df["MTS_ANT"] = df["MTS_ANT"].apply(lambda x: 1 if x >= 2 else 0)
+  df["SEXE"] = df["SEXE"].apply(lambda x: 1 if x >= 2 else 0)
+  df["ORIENT_SEX"] = df["ORIENT_SEX"].apply(lambda x: 1 if x > 1 else 0)
+  return df
+
+def data_preprocessing(df, active_threshold, train_test_split_size=0.2, random_state=0):
+  df = categorize_data(df, active_threshold)
+  df["ONE_PART"] = df.NB_MTS.apply(lambda x: 1 if x==1 else 0)
+  df["2+_PART"] = df.NB_MTS.apply(lambda x: 1 if x>1 else 0)
+  del df["NB_MTS"]
+  
+  df_x = df
+  df_y = df.DIAGN
+  del df_x['DIAGN']
+    
+  # adding the intercept
+  df_x["intercept"] = np.ones((df.shape[0], ))
+  
+  # Creating the training and test set
+  x_train, x_test, y_train, y_test = train_test_split(df_x, df_y, test_size=train_test_split_size, random_state=random_state)
+  
+  return df, x_train, x_test, y_train, y_test
+```
+
+## Visualisation des données
+
+Afin d'avoir une idée de la séparabilité des classes nous allons effectuer une analyse des correspondances multiples des données (sans la variable dépendante) afin de les projeter sur un plan factoriel et avoir une visualisation grossière de la séparabilité des classes. L'analyse des correspondances multiples consiste à réencoder les individus selon des variables synthétiques créées à partir des variables catégorielles initiales, et a pour objectif de construire des variables synthétiques qui permettent de projeter les données initiales de telle sorte à conserver le mieux possible les distances entre elles. L'intérêt de cette méthode est de créer des variables synthétiques plus explicatives des données pour les premières, et peut être utilisées pour faire de la réduction de dimension, de l'interprétation de données, ou de la visualisation comme ce qui nous intéresse ici:
+
+```{python}
+import mca
+
+df_1, x_train, x_test, y_train, y_test = data_preprocessing(data.dropna(), data.NB_PART.median())
+X = pd.concat([x_train, x_test])
+del X["intercept"]
+point_colors = pd.concat([y_train, y_test]).apply(lambda x: "red" if x else "blue")
+point_alpha = pd.concat([y_train, y_test]).apply(lambda x: 1 if x else 0.5)
+
+mca_df = mca.MCA(X)
+points = mca_df.fs_r(N=2)
+
+plt.figure()
+plt.margins(0.1)
+plt.xlabel('Facteur 1')
+plt.ylabel('Facteur 2')
+plt.scatter(points[:, 0], points[:, 1], s=10, marker='o', c=point_colors, alpha=point_alpha, linewidths=0)
+plt.axhline(0, color='lightgray')
+plt.axvline(0, color='lightgray')
+plt.title("Projection des individus sur le premier plan factoriel\nAnalyse des correspondances multiples")
+plt.show()
+```
+
+Nous voyons clairement que tous les points sont mélangés. Une approche simple de clustering ne nous permettra donc pas à priori de séparer les classes de diagnostic facilement. Cela nous indique aussi que la précision de notre modèle ne sera probablement pas excellente.  
+
+## Construction modèle de référence
+
+Nous allons maintenant construire un modèle naïf, qui nous servira de référence afin de savoir si nos résultats ultérieurs constituent bien une amélioration par rapport à celui-ci. 
+
+Nous allons donc séparer nos données entre la variable dépendante et les variables explicatives, les séparer entre un jeu d'entraînement et un jeu d'évaluation afin de ne pas évaluer notre modèle sur des données qu'il aurait déjà vues. La taille du jeu d'évaluation sera de 20% des observations car il s'agit de la taille qui a été recommandée dans la spécification du projet.
+
+Pour ce modèle initial, nous souhaitons éviter l'introduction de biais via une stratégie d'imputation potentiellement inadaptée.  
+
+```{python}
+print("Part d'observations ayant des données manquantes:", round(100*(len(data) - len(data.dropna())) / len(data), 2), "%")
+```
+
+Si nous décidons de simplement oublier les observations contenant des données manquantes, alors nous perdons un peu plus de 13% de nos observations initiales. Bien évidemment nous chercherons des stratégies pour conserver un maximum de données lorsque nous travaillerons sur un modèle final, mais pour obtenir un simple modèle de référence nous décidons que c'est acceptable. La perte d'information liée à 13% du jeu de données nous laisse avec plus de 3000 observations pour des données à 9 variables. Il y a probablement de la redondance dans les informations apportées par ces individus et leur perte aura probablement assez peu d'impact sur le résultat. L'alternative est d'utiliser une méthode d'imputation qui pourrait potentiellement introduire des biais, ce qui pourrait être dommageable.
+
+Nous pouvons maintenant effectuer la regression logistique.
+
+```{python}
+# Préparation des données
+d_ref = data.dropna()
+d_ref, x_train, x_test, y_train, y_test = data_preprocessing(d_ref, d_ref["NB_PART"].median())
+
+# Spécification de la régression logistique
+max_iters = 10
+model_naive = LogisticRegression(solver="lbfgs", max_iter=max_iters, warm_start=True)
+
+# Ajustement et évaluation de la régression
+model_naive.fit(x_train, y_train)
+yhat_train = model_naive.predict(x_train)
+accuracy_train = accuracy_score(y_train, yhat_train)
+auc_train = roc_auc_score(y_train, yhat_train)
+
+yhat_test = model_naive.predict(x_test)
+accuracy_test = accuracy_score(y_test, yhat_test)
+auc_test = roc_auc_score(y_test, yhat_test)
+
+res = pd.DataFrame({"Accuracy (%)": [accuracy_train, accuracy_test], "AUC": [auc_train/100, auc_test/100]})
+res.index = ["Train", "Test"]
+100*res.round(4)
+```
+
+Notre modèle montre une **AUC** proche de 0.5, ce qui signifie qu'il n'est pas plus capable de prévoir l'état positif ou négatif d'un individu à partir de ses caractéristiques qu'un modèle purement aléatoire.  
+La précision du modèle à environ 0.75, qui est proche de la proportion d'individus négatifs dans le jeu d'entraînement, semble suggérer que notre modèle prédit systématiquement que les individus sont négatifs.  
+
+```{python}
+yhat_test = model_naive.predict(x_test)
+print(f"Nombre de prédictions: {len(x_test)}\nPrédiction positives: {sum(yhat_test)}, prédiction négatives: {len(x_test) - sum(yhat_test)}")
+```
+
+## Modélisation
+### Sans imputation des données manquantes
+
+Notre objectif est de caractériser les groupes à risque. Pour cela, nous allons construire un modèle statistique capable d'identifier - aussi bien que possible - les individus diagnostiqués positifs ou négatifs. Nous n'aurons alors plus qu'à interpréter les paramètres de ce modèle afin d'identifier les caractéristiques des groupes sociaux plus à risque.  
+
+Notre variable dépendante est binaire et une régression logistique est donc adaptée. Nous allons dans un premier temps chercher la meilleure stratégie de compensation du déséquilibre entre le nombre de modalités positives et négatives de notre variable expliquée.  Pour cela nous allons partir d'un modèle simple et simplement faire varier les stratégies:
+- oversampling: aléatoire et SMOTE
+- undersampling: aléatoire et Liens Tomek
+- changer le poids des classes  
+
+Nous aurons également besoin de chercher le nombre d'itérations corrects pour l'ajustement de nos algorithme afin d'éviter l'overfitting. Nous allons construire une fonction capable d'effectuer tout ce screening sur les hyperparamètres, car nous en aurons à nouveau besoin dans la prochaine section.  
+
+```{python}
+# Problème de version: le code ne fonctionne pas dans le notebook unbalanced.ipynb
+# il faut utiliser sampler.fit_resample(X, y) au lieu de sampler.fit_sample(X, y)
+
+# La bonne pratique est de systématiquement fournir un fichier "requirements.txt" contenant toutes les versions des packages. On peut le générer avec la commande "conda list > requirements.txt" depuis la console. Il s'installe alors simplement avec "conda install requirements.txt" pour l'utilisateur cible. Cela évite aux utilisateurs de courir après tous les numéros de versions un par un.
+
+def random_undersampling(X, y):
+  ruspler = imblearn.under_sampling.RandomUnderSampler()
+  return ruspler.fit_resample(X, y)
+
+
+def random_oversampling(X, y):
+  rospler = imblearn.over_sampling.RandomOverSampler()
+  return rospler.fit_resample(X, y)
+
+
+def smote_oversampling(X, y):
+  smote = imblearn.over_sampling.SMOTE(sampling_strategy="auto", k_neighbors=5)
+  return smote.fit_resample(X, y)
+
+
+def tomeklinks_undersampling(X, y):
+  tomek = imblearn.under_sampling.TomekLinks()
+  return tomek.fit_resample(X, y)
+
+
+def select_best_settings(data, balancing="weight", max_iters=20):
+  x_train, x_test, y_train, y_test = data
+  weights_screen = [i/10 for i in range(1, 51)]
+  
+  if balancing == "weight":
+    best_global_weight, best_global_auc, best_global_iters = 1, 0.5, 1
+    for epoch in range(1, 1+max_iters):
+      best_weight, best_auc = weights_screen[0], 0.5
+      for w in weights_screen:
+        weights = {0: 1, 1: w}          
+        model = LogisticRegression(solver="lbfgs", max_iter=epoch, warm_start=True, class_weight=weights)   
+        model.fit(x_train, y_train)
+        yhat = model.predict(x_test)
+        auc = roc_auc_score(y_test, yhat)
+        if auc > best_auc:
+          best_auc = auc
+          best_weight = w
+      if best_auc > best_global_auc:
+        best_global_auc = best_auc
+        best_global_weight = best_weight
+        best_global_iters = epoch
+    print(f"AUC: {best_global_auc:.2f} avec poids 1 pour classe négative et {best_global_weight} pour la classe positive, avec {best_global_iters} epochs.")
+  elif balancing is not None:
+    x_train, y_train = balancing(x_train, y_train)
+    best_auc, best_iters = 0.5, 1
+
+    model = LogisticRegression(solver="lbfgs", max_iter=max_iters, warm_start=True)
+    for epoch in range(1, 1+max_iters):
+      model.fit(x_train, y_train)
+      yhat = model.predict(x_test)
+      auc = roc_auc_score(y_test, yhat)
+      if auc > best_auc:
+        best_auc = auc
+        best_iters = epoch
+    print(f"AUC: {best_auc:.2f}, avec {best_iters} epochs.")
+```
+
+
+Nous pouvons maintenant chercher la meilleure combinaison de paramètres pour note régression.  
+
+```{python}
+_, x_train, x_test, y_train, y_test = data_preprocessing(data.dropna(), data.NB_PART.median())
+
+print("Avec du sous-échantillonement aléatoire:")
+select_best_settings((x_train, x_test, y_train, y_test), 
+                     balancing=random_undersampling, max_iters=100)
+print("\nAvec du sur-échantillonement aléatoire:")
+select_best_settings((x_train, x_test, y_train, y_test), 
+                     balancing=random_oversampling, max_iters=100)
+print("\nAvec du sur-échantillonement SMOTE:")
+select_best_settings((x_train, x_test, y_train, y_test), 
+                     balancing=smote_oversampling, max_iters=100)
+print("\nAvec du sous-échantillonement Tomek Links:")
+select_best_settings((x_train, x_test, y_train, y_test), 
+                     balancing=tomeklinks_undersampling, max_iters=100)
+print("\nEn ajustant les poids des classes:")
+select_best_settings((x_train, x_test, y_train, y_test), 
+                     balancing="weight", max_iters=15)
+```
+
+Il semble que toutes les méthodes de correction du déséquilibre de fréquences de modalités cibles donnent des résultats similaires. Nous privilégierons plutôt l'approche de Tomeks Links car elle devrait plus cibler la direction des individus à risque et offrir de meilleures identificatoins de caractéristiques des groupes à risques.
+
+#### Sélection des variables
+
+Une fois les modèles établis, nous devons identifier les variables pertinentes pour la classification. C'est d'autant plus important que notre objectif avec la modélisation est d'interpréter les coefficients pour identifier des groupes à risque. Nous avons choisi d'utiliser une backward regression afin d'ôter les variables peu pertinentes. Elle est utilisable car nous allons ainsi générer des modèles emboîtés. Notons que d'autres approches auraient été possibles: forward regression ou bilateral regression, sur les critères de l'AIC ou BIC...  
+
+
+```{python}
+# Preparing dataset
+_, x_train, x_test, y_train, y_test = data_preprocessing(data.dropna(), data.NB_PART.median(), random_state=160012)
+
+X = pd.concat([x_train, x_test])
+y = pd.concat([y_train, y_test])
+
+# Applying TomekLinks undersampling to have more interpretable coefficients
+X_us, y_us = tomeklinks_undersampling(X, y)
+# applying backward selection
+threshold_pval = 0.05
+
+Xcol = list(X.columns)
+while True:
+  changed=False
+  model = sm.Logit(y_us,sm.add_constant(pd.DataFrame(X_us[Xcol]))).fit(maxiter=1000, disp=False)
+  pvalues = model.pvalues.iloc[1:]
+  worst_pval = pvalues.max() 
+  if worst_pval > threshold_pval:
+    changed=True
+    worst_feature = pvalues.idxmax()
+    Xcol.remove(worst_feature)
+  if not changed: break
+
+print("Variables à conserver dans le modèle:\n\t", ", ".join(Xcol))
+```
+
+Notre backward sélection nous a permit de ne conserver que les coefficients qui portent suffisamment d'information pour être pertinent. Voyons la qualité de notre modèle, évalué selon l'aire sous la courbe ROC sur les données non sous-échantillonées:  
+
+```{python}
+X = X.loc[:, Xcol]
+model_drop = sm.Logit(y, X).fit(maxiter=1000)
+print(f"\nAUC: {round(roc_auc_score(y, model.predict(X)), 2)}")
+```
+
+Nous avons une AUC plutôt bonne compte tenu de la diffculté de séparation des classes que nous avions prévue initialement.  
+
+# Imputation
+
+
+
+
+
+
+

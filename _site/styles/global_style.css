@@ -1,0 +1,58 @@
+body, html {
+  font-family: Arial, sans-serif;
+  margin: 0; /* Reset margin to 0 */
+  padding: 0; /* Reset padding to 0 */
+  background-color: #F0F0F0;
+  height: 100%; /* Set height to 100% */
+}
+
+#container {
+  display: flex;
+  height: 100%;
+}
+
+#sidebar {
+  width: 20%;
+  background-color: #C9EFFF;
+  box-shadow: 1px 1px 5px darkgray;
+  padding: 10px;
+}
+
+#content {
+  width: 80%;
+  padding: 10px;
+  padding-top: 0px;
+  padding-bottom: 0px;
+  text-align: justify;
+  text-justify: inter-word;
+  margin: 20px;
+}
+
+iframe {
+  box-shadow: 1px 1px 5px darkgray;
+  border-style: none;
+  height: 100%;
+}
+
+h1 {
+  font-style: bold; 
+}
+
+ul {
+  list-style-type: none;
+  padding: 0;
+}
+
+li {
+  margin-bottom: 10px;
+}
+
+.sidebarlist {
+  margin: 15px;
+  font-size: 20px;
+}
+
+.sublist {
+  margin: 10px;
+  font-size: 15px;
+}
