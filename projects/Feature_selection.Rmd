@@ -1,0 +1,346 @@
+---
+title: "Feature selection"
+author: "Danny Morgant"
+date: "2023-09-25"
+output:
+  html_document:
+    theme: cosmo
+    code_folding: hide
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+```{r, echo=F, include=F}
+library(reticulate) 
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = '/home/dfuu/miniconda3/envs/ml/plugins/platforms/'
+```
+
+# Introduction to feature selection strategies  
+
+In this project, we will implement a few common feature selection strategies. The toy example we were given is a unknown time series, and are tasked to find an autoregressive model (**AR**) with a max lag of 50.  
+The AR model has the form:
+$$X(t) = a_0 + a_1X(t-1) + a_2X(t-2) + ... + a_qX(t-q) + \epsilon(t)$$
+
+In which the $a_i$ are the coefficients to estimate. The goal of this project being to practice introductory feature selection strategies, we will not go through the usual time series analysis workflow with characterization of stationnarity.  
+
+## Data preparation  
+
+However we still need to look at the way the data is structured and prepare it for our task.  
+
+```{python}
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import statsmodels.api as sm
+
+plt.style.use("bmh")
+
+AR = np.array(pd.read_csv("AR.csv", header=None))
+print("Data shape:", AR.shape)
+N = AR.shape[0]
+```
+
+We have 5000 observations of a single variable. In the above equation, $X(t)$ is therefore a scalar and not a vector. This simplifies the processing. In order to use a linear regression approach to find the coefficients, we will need a structure $X$ containing the data to fit and a vector containing the values $y$ to fit to. $y$ will essentially be the initial AR time series, amputed from its first 50 values. This is because to predict the *kth* value we need the values from $k-50$ to $k$, which aren't all available for $k<50$.  
+
+For convenience, we will construct a dataframe X which will contain all the $t-1, t-2, ..., t-50$ values corresponding to the *t = t-0* value as prediction target, as well as the value 1 for the fitting of $a_0$.
+
+```{python}
+colnames = ["t_"+str(i) for i in range(50, 0, -1)] + ["cst"]
+X = np.array([AR[k:k+51].T.reshape((51,)) for k in range(N-50)])
+X = pd.DataFrame(X, columns=colnames)
+# extrating the target prediction vector into y
+y = X.cst
+# Setting the first column to 1 => feature to fit a_0
+X = X.assign(cst=1)
+X.head()
+```
+
+This is not very memory-efficient: as seen above there is a lot of redundancy in the values of the X dataframe. We can however afford it in this case as the data isn't too big, and it will be convenient in order to be able to directly use *sklearn* or *statsmodels* linear regression objects.
+
+We also need to talk about how to evaluate the models. A traditional approach could be to use a simple train/test procedure, but this not what we will do as this is computationally intensive (we will train a lot of models), and wastes data. Instead we will select the best models based on the BIC in order to have the possibility to compare models with different number of parameters which is crucial in this case.  
+
+We will use three different ways to select the features: *Best subset selection*, *Backward selection*, and a *Genetic algorithm*. In order to compare how relatively good are each method, we need a separate set of data to evaluate the best model from each method, so we will use a train/test split.  
+
+However *data leakage* may or may not be an issue. Data leakage means that the model is using some data as input for prediction that would not be available in real time, thus artificially increasing its performance during the training and evaluation phase. It is not very clear if our approach would exhibit *leakage*, but when dealing with time series it is much better practice to not alter the continuity of the data. A complete discussion on the ways data leakage can occur and impact time series analysis is beyond the scope of this homework as it can also include subtleties about how the models will be used, so we will err on the dull side of the knife and choose our approach by assuming we need to avoid *leakage*. This implicitly assumes that we are more interested in the ability of our model to generalize to new data instead of its ability to properly describe the current data. If someone is more interested in the later, a different choice may or may not be suitable.  
+In particular, this means we unfortunately don't want to use procedures like *k-fold cross validation* in this specific case. All these considerations let us to structure our work in the following way:  
+
+- In each approach, we will select the models on the basis of BIC.
+- In order to compare the approaches, we will use a training set and a test set:
+  - the training set will be comprised of the first 4000 observations.
+  - the test set will be comprised of the last 1000 observations.
+ 
+This way of constructing the training and test sets keeps the continuity of the data. The performance results will very likely be lower than the performance of the models if we don't maintain the continuity of the data: maybe the patterns changed over time. By using a train/test set the way we did here the later patterns will not have been seen at training time, affecting the quality of the model. However testing is meant to give us an idea of how the model may perform for future unknown values, and since we don't have access to future patterns this way of evaluating the selected models will be closer to a real life scenario.  
+
+In order to simplify further code, we start by creating the datasets and building a function able to evaluate the models:
+
+```{python}
+X_train, y_train = X.iloc[:4000,:], y[:4000]
+X_test, y_test = X.iloc[4000:,:], y[4000:]
+
+from sklearn.metrics import mean_squared_error as MSE
+
+def eval_model(xtrain, ytrain, xtest=None, ytest=None, included=None):
+    """ Function to evaluate an OLS model for feature selection.  
+    If a test set is provided, it will return the MSE on the test set.  
+    If no test set is provided, it will return the BIC of the model"""
+    
+    if xtest is None or ytest is None:
+        if included is not None: 
+            xtrain = xtrain.iloc[:, included]
+        model = sm.OLS(ytrain, xtrain).fit()
+        return model.bic  
+    else:
+        if included is not None: 
+            xtrain = xtrain.iloc[:, included]
+            xtest = xtest.iloc[:, included]
+        model = sm.OLS(ytrain, xtrain).fit()
+        y_pred = model.predict(xtest)
+        return MSE(ytest, y_pred)
+```
+
+## Best subset selection with $k = 1, 2, 3, 4$
+
+Best subset selection is a very straightforward approach: we simply try every possible combination of parameters until we find the best one. However with $50$ features as is the case here, this would mean testing $2^{50} = 1.12 \cdot 10^{15}$ combinations which is way too much. For computational reasons we will only try models using up to 4 features.  
+
+```{python}
+import itertools
+import time
+
+MAX_FEATURES = 4
+
+best_model = {}
+colindices = list(range(X.shape[1]))
+for p in colindices[1:MAX_FEATURES+1]:
+    tic, nmodels = time.time(), 0
+    for comb in itertools.combinations(colindices, p):
+        nmodels += 1
+        res = eval_model(X_train, y_train, included=list(comb))
+        if best_model == {} or best_model["bic"] > res: 
+            best_model = {"bic": res, "features": comb}
+    toc = time.time()
+    print(f"Evaluated {nmodels} models in {toc-tic:.02f}s")
+
+best_subset_features = list(best_model["features"])
+print("Selected features:", ','.join([X.columns[f] for f in best_subset_features]), "\nBIC:", best_model["bic"])
+```
+The best model was selected and its features kept in a list. We will compare the best models together in the last part.
+
+## Backwards selection
+
+When we have a model with $n$ features, we test all models with $n-1$ features and keep the one with the lowest $BIC$. We then perform the same process with the newly selected model. The starting point is the model containing all the features. Moreover, at each step we make sure to not retest the features that have been set aside earlier.  
+
+The traditional way to use backward selection is to remove features when the *pvalue* associated with them is the worst of all and stop when the worst *pvalue* is below a predefined threshold. In this implementation we use the $BIC$ for consistency reasons with other subset selection methods. Since we don't have a stopping criteria anymore, we will keep evaluating models down to $1$ feature. The selected model will be the one with the lowest overall BIC, exploiting the trade-off between ability to explain the data and model complexity that is built in the $BIC$ criteria.
+
+```{python}
+def processSubset(feature_set):
+    # Fit model on feature_set and calculate RSS
+    model = sm.OLS(y,X[list(feature_set)])
+    regr = model.fit()
+    BIC = regr.bic
+    return {"model":regr, "BIC":BIC}
+
+def backward(predictors):
+    results = []
+    for combo in itertools.combinations(predictors, len(predictors)-1):
+        results.append(processSubset(combo))
+    # Wrap everything up in a nice dataframe
+    models = pd.DataFrame(results)
+    # Choose the model with the  RSS
+    best_model = models.loc[models['BIC'].argmin()]
+    # Return the best model, along with some other useful information about the model
+    return best_model
+  
+models_bwd = pd.DataFrame(columns=["BIC", "model"], index = range(1,len(X.columns)))
+
+tic = time.time()
+predictors = X.columns
+
+while(len(predictors) > 1):  
+    models_bwd.loc[len(predictors)-1] = backward(predictors)
+    predictors = models_bwd.loc[len(predictors)-1]["model"].model.exog_names
+
+toc = time.time()
+print("Total elapsed time:", (toc-tic), "seconds.")
+
+models_bwd['BIC'] = pd.to_numeric(models_bwd['BIC'])
+backward_header = models_bwd.loc[models_bwd['BIC'].argmin()]['model'].model.exog_names
+backward_bic = models_bwd.loc[models_bwd['BIC'].argmin()]['model'].bic
+print("Best model with backward selection:")
+print(f"Selected features: {','.join(X.loc[:,backward_header].columns[::-1])}\nBIC: {backward_bic:.2f}")
+```
+
+## Genetic algorithm
+
+In this last part, we want to use a genetic algorithm (GA) in order to select the best features for linear regression. Genetic algorithms are a very interesting approach to feature selection.  
+
+Best subset selection works by searching the entire space of solutions. It guarantees to find the best solution, but it becomes impossible to use in practice very fast when the number of dimensions of the solution space increases: our problem is quite simple here and this approach is already unusable.  
+
+Backwards selection aims to solve this issue: we start from the complete set of features, and we iteratively explore the solution space by iteratively exploring the *one-different* solutions. This makes the number of solutions to evaluate not too big and is possible to do in practice (and it quite fast). The main issue is that a huge part of the solution space isn't explore, and the exploration is constrained near a single *path* of solutions. for example, most solutions which would be *two-different* from a slected solution will not be explored. This means that the *path* taken is actually very far from the majority of the possible solutions, and as the dimensionality increases it becomes more and more likely that the "good parts" of the search space will not be explored.  
+
+Genetic algorithms work very differently. We will briefly introduce how they work before talking about why they are interesting.  
+A genetic algorithm consists of two parts: a set of individuals or chromosoms (thereafter *solutions*), and a set of operators that govern how these solutions will evolve. These algorithms take their root in an attempt to (naively) mimic the evolutionary process as understood in nature and applying it to solve optimization problems, hence the (sometimes slightly improper) use of biological words.  
+- The solutions are objects which contain elements used to encode a solution. The simplest GAs (and also relatively effective and widely used) use a *binary encoding*, in which the solutions are simply a list of 0s and 1s.
+- A mutation operator: this operator will randomly make a small change to a solution, for example flipping some of its bits. This creates a new solution *slightly* different from is source solution.  
+- A crossover operator: this one takes two solutions (A and B) as an input, and outputs two other solutions (C and D), each possessing part of the information from A and part of the information from B. This can create two new individuals which can be very different from A and B if the traded information was very different, or slightly different if the traded information was similar.
+- A selection operator: Its role is to remove the bad solutions from the set, and select the most suitable solutions to apply the previous operators to in order to create the next set of solutions. The notion or good or bad solution is relative to a fitness function that is specifically tailored to the problem to solve.  
+- There are many other possible operators: we only discussed the ones we used.  
+
+The GA works by first creating randomly an initial population of solutions, and then iteratively applying the operators in order to evolve the solutions, hopefully improving them.  
+
+By creating the initial opulation of random solutions, ideally uniformly, we are spreading the individuals in the search space. The mutation operator allows the solutions to explore *near* themselves in the search space, while the crossover operator allows the solutions to *jump* to another area of the search space. The selection operator makes the *jumps* of the solution less and less drastic over the course of generations, allowing the algorithm to explore more and more finely the regions of the solution space that seem interesting *fitness-wise*. The mutation operator allows to keep diversity in the population of solutions (although it's not clear to which extent) even in further generations, which avoids the population reaching a fixed point where all individuals represent almost the same solution (in theory).  
+This allows the genetic algorithms to both spread out its search in the solution space, offering (in theory) a good coverage, and to converge on one or several solutions over time. While there is no guarantee of reaching the global minimum/maximum, the ability of these algorithms to spread out their exploration of the search space makes them very interesting in applications where the mutation/crossover/selection operators make sense in terms of the encoding chosen for the solutions. While not relevant in this specific case, we think it's important to note that contrary to many other optimization algorithms GAs only require two things: the objective function (*aka* fitness function) should be measurable, and the application of the operators on a valid solution should output another valid solution. The first condition is quite hard to miss in a real-world application, and the second is only dependent on the ability of the researcher to find a suitable encoding. This makes genetic algorithms potentially useful for a very wide range of applications. They are however unsuitable for applications where the global optimum is required to be found. Another property of GA is their relation with the curse of dimensionality. Their ability to explore the solution space is mostly dependent on the crossover and mutation operators. In the crossover operator in particular, the amount of information exchanged between two solutions actually scales up with dimensionality. The mutation operator also acts on the encoding elements of the solutions, and can be impletemented to also scale with the its size. Obviously, GA are not immune to the issue of high dimensions, but the way they are affected is different, which can make them extremely attractive for certain specific high-dimensional tasks. A study of this relationship is way beyond the scope of this document though.  
+
+Back to our problem at hand: selecting the best features to include in an AutoRegressive model.
+
+Here, the solutions are encoded as a list of bits. Each bit represents the inclusion (1) or exclusion (0) of the corresponding feature. The mutation operator flips one (or a random number of, depending on the underlying implementation of DEAP) bit randomly. The crossover operator is set to cxOnePoint, which means cutting the list in half and exchanging the left and right parts of the list between the input solutions. These are very common choices for these operators.  
+For the selection operator, we decided to use the tournament selection with a tournament size of 3. With this operator, 3 solutions are picked randomly in the population and the best one is selected and put in a list for the crossover operation. Size 3 is rather small, but this allows to select more slowly (in other words, less evolutionary pressure) and thus keep more diversity in the population, allowing a better exploration of the search space.    
+
+```{python}
+from deap import creator, base, tools, algorithms
+import random
+
+def getBIC(individual, X, y):
+    # Only pick columns with chromosome=1
+    cols = [k*i for k, i in zip(individual, range(X.shape[1]))]
+    X_selected = X.iloc[:,cols]
+    # Fit the linear regression and returns the BIC
+    model = sm.OLS(y, X_selected).fit()
+    return (model.bic,)
+
+
+def geneticAlgorithm(X, y, n_population, n_generation, verbose=True):
+    """
+    Deap global variables
+    Initialize variables to use eaSimple
+    """
+    # Create individual
+    creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
+    creator.create("Individual", list, fitness=creator.FitnessMin)
+    # create toolbox
+    toolbox = base.Toolbox()
+    toolbox.register("attr_bool", random.randint, 0, 1)
+    toolbox.register("individual", tools.initRepeat,
+                     creator.Individual, toolbox.attr_bool, len(X.columns))
+    toolbox.register("population", tools.initRepeat, list,
+                     toolbox.individual)
+    toolbox.register("evaluate", getBIC, X=X, y=y)
+    toolbox.register("mate", tools.cxOnePoint)
+    toolbox.register("mutate", tools.mutFlipBit, indpb=0.05)
+    toolbox.register("select", tools.selTournament, tournsize=3)
+    # initialize parameters
+    pop = toolbox.population(n=n_population)
+    hof = tools.HallOfFame(n_population * n_generation)
+    stats = tools.Statistics(lambda ind: ind.fitness.values)
+    stats.register("avg", np.mean)
+    stats.register("min", np.min)
+    stats.register("max", np.max)
+    # genetic algorithm
+    pop, log = algorithms.eaSimple(pop, toolbox, cxpb=0.75, mutpb=0.1,
+                                   ngen=n_generation, stats=stats, halloffame=hof,
+                                   verbose=verbose)
+    # return hall of fame
+    return hof, log
+
+
+def bestIndividual(hof, X, y):
+    """
+    Get the best individual
+    """
+    bestAccuracy = None
+    for individual in hof:
+        if bestAccuracy is None:
+            bestAccuracy = individual.fitness.values
+            _individual = individual            
+        if(individual.fitness.values[0] < bestAccuracy):
+            bestAccuracy = individual.fitness.values
+            _individual = individual
+    _individualHeader = [X.columns[i] for i, chrom in zip(range(len(X.columns)), _individual) if chrom]
+    return _individual.fitness.values, _individual, _individualHeader
+```
+
+We will start with a population of 50 solutions, which will evolve over 100 generations. Because GA are a class of stochastic algorithms, the result won't allways be the same. As such we will run the algorithm 5 times and pick the best found solution.  
+This procedure is superior to simply increasing the population size or the number of generations because even if the algorithm has excellent properties in terms of space exploration, there is still some *path dependency* in that the early selected individuals will bias the exploration of the solution space towards their position. By rerunning the experiment we are reinitializing the population and therefore are less impacted by this bias (because the initial bias should be different each time). Even though we opted for a *slow* selection operator in order to help space exploration, it doesn't hurt to choose this procedure. We will print the best selected model in each run and get an idea of the variability of the results.  
+
+```{python}
+import warnings
+warnings.filterwarnings('ignore')
+
+n_pop = 50
+n_gen = 100
+BOX = 5
+verbose = False
+verbose2 = True
+
+bestBIC, bestHeader, bestInd = None, None, None
+for i in range(BOX):
+    # apply genetic algorithm and get best individual
+    hof, log = geneticAlgorithm(X_train, y_train, n_pop, n_gen, verbose=verbose)
+    bic, individual, GA_header = bestIndividual(hof, X, y)
+    if bestBIC is None or bic < bestBIC:
+        bestBIC, bestHeader, bestInd = bic, GA_header, individual
+    if verbose2:
+        print(f"Run {i+1}: best BIC is {bestBIC[0]}, selected model:\n{','.join(bestHeader)}\n")
+
+print('\n--------------------------------------------------------')
+print(f'Overall Best BIC: \t{bestBIC[0]:.4f}')
+print('Selected features\t: ' + ",".join(bestHeader))
+```
+
+We see that we have very little variability in the BIC of the selected solutions. Not shown here are runs with a higher tournament size where the results were even more diverse in terms of BIC of solutions. We impute the stability of our results to the choice of a low tournament size to reduce the competitiveness of the selection process and keep more diversity in the population, guaranteeing a better exploration of the search space.    
+
+## Comparison of models
+
+We have successfully implemented a few methods of feature selection for this AR-fitting problem. An interesting part is to check how these methods fare against another. In order to properly evaluate them, we will look at their performance on the test set we extracted earlier. This set has never been used in the previous parts and we avoided leakage, so the performance of the selected models on this set should be indicative of the generalization effectiveness of the selected models.
+
+```{python}
+import numpy as np
+plt.rcParams["figure.figsize"] = (8,4)
+
+names = ["Training set", "Test set"]
+model_mses = {"All features": [], 
+              "Genetic algorithm": [], 
+              "Best subset selection": [],
+              "Backward selection": []
+             }
+
+# Evaluating the selected models
+model_mses["All features"].append(eval_model(X_train, y_train, X_test, y_test))
+model_mses["All features"].append(eval_model(X, y, X, y))
+model_mses["Genetic algorithm"].append(eval_model(X_train[GA_header], y_train, X_test[GA_header], y_test))
+model_mses["Genetic algorithm"].append(eval_model(X[GA_header], y, X[GA_header], y))
+
+model_mses["Best subset selection"].append(eval_model(X_train.iloc[:,best_subset_features], y_train,
+                                                      X_test.iloc[:,best_subset_features], y_test))
+model_mses["Best subset selection"].append(eval_model(X.iloc[:,best_subset_features], y,
+                                                      X.iloc[:,best_subset_features], y))
+model_mses["Backward selection"].append(eval_model(X_train.loc[:,backward_header], y_train,
+                                                      X_test.loc[:,backward_header], y_test))
+model_mses["Backward selection"].append(eval_model(X.loc[:,backward_header], y,
+                                                      X.loc[:,backward_header], y))
+
+
+x = np.arange(len(names))
+width = 0.15
+multiplier = 0
+
+fig, ax = plt.subplots(layout='constrained')
+for attribute, measurement in model_mses.items():
+    offset = width * multiplier
+    rects = ax.bar(x + offset, measurement, width, label=attribute)
+    ax.bar_label(rects, padding=3)
+    multiplier += 1
+
+ax.set_ylabel('Mean squared error')
+ax.set_title('Performances of selected models')
+ax.set_xticks(x + width, names)
+ax.legend(loc='upper left', ncols=3)
+ax.set_ylim(0.8, 1.2)
+plt.show()
+```
+
+
+Interestingly, the performance of the selected models decreased more on the test set that the performance of the baseline model with all parameters. We identified two main possible causes for this observation:  
+- **Overfitting**: by selecting less features, the model doesn't learn information that is relevant to the whole dataset in favor of specifically targeting relevant information for the training set. As such explanatory variables that are relevant have been set aside. Geometrically, the variables that have been set aside have been so because they are close to being colinear to a vector inside the separation hyperplane (which means normal to the hyperplane defining vector, hence a factor close to 0, interpretable as almost 0 correlation with a change in the response variable). However because we kept the continuity of the data and the fact that these features aren't perfectly colinear with the separation hyperplane, the distance between them increases as we get further away from the *center* (= mean) of the training set. Since we kept as the test set the data further in the future, this divergence can explain why some important features may have not been selected: they would have been seen as important had we kept the whole dataset, or at least selected the training set randomly in the whole dataset, but we didn't for reasons explained earlier.
+- **Changes in the DGP** (Data Generating Process): When dealing with time series, we are always at risk that the phenomenon generating the data may change over time. By keeping the continuity of the data, we isolated the patterns in the first 4000 observations for training. If the patterns in the last 1000 observations are different, there is no way for the model to learn for them, and in particular the selection process will be blind to them. In this case, there is no real way to predict how the performance on the test will change (improving or decreasing) based on the complexity of the model.
+
+The fact that the model with all features performed better on the test set than the models with selected features led us to propose that the former explanation is the most plausible in this case. However without knowing where the toy data that was provided comes from, we can't be sure. Also, it's not very interesting to investigate further as the interpretation couldn't be related back to a real phenomenon. The models selected by backward selection and best subset limited to 4 are also very similar. This is interesting: backward selection managed to get to a proper low-number of features model despite the small percentage of the search space it explored. Interestingly, backward selection led to the most overfitting out of the selected models.
