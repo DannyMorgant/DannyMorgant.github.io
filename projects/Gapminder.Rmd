@@ -1,0 +1,220 @@
+---
+title: "Introduction à l'EDA - *Gapminder*"
+author: "Danny Morgant"
+date: "2022-10-27"
+output:
+  html_document:
+    theme: cosmo
+    code_folding: hide
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+library(gapminder)
+library("data.table")
+library(ggplot2)
+library("gridExtra")
+data(gapminder)
+gapminder = data.table(gapminder)
+
+new_levels = c("Afrique", "Amériques", "Asie", "Europe", "Océanie")
+levels(gapminder$continent) = new_levels
+
+colors = c("#ba1919", "#e29924", "#1874ca", "#197113", "#9689df")
+linesize = 0.5
+bckgd = "#EDEDED"
+line_color = "#CDCDCD"
+theme_rdsm = theme(panel.background = element_rect(fill=bckgd, color=bckgd),
+                   panel.grid.major = element_line(color=bckgd),
+                   panel.grid.minor = element_line(color=bckgd),
+                   panel.grid.major.y = element_line(color=line_color, 
+                                                     linetype = "dashed",
+                                                     size=0.1),
+                   legend.title = element_blank())
+theme_noxlabel = theme(axis.text.x = element_blank())
+```
+
+L'objet de cette analyse est d'explorer la relation entre la richesse des pays et l'espérance de vie de leurs habitants. En effet, le PIB par habitant est une mesure de la richesse d'un pays qui ne prend pas en compte les éventuelles inégalités au sein de sa population. Dans la mesure où l'espérance de vie est plus ou moins bornée du fait de limites biologiques et technologiques, il a été choisi de supposer que l'on peut utiliser l'espérance de vie moyenne d'une population pour avoir une idée grossière de la qualité de vie de toutes les tranches de celles-ci, et en particulier les plus pauvres. On cherchera à terme à tenter d'observer si le PIB par habitant se traduit bien par une meilleure espérance de vie.
+
+## Une première vue sur le PIB par habitant
+
+On s'intéresse dans un premier temps à l'évolution du PIB par habitant et par continent.
+
+```{r, warning=F}
+continent_vector = levels(gapminder$continent)
+
+table_gdp = data.table(matrix(
+  nrow=length(unique(gapminder$year)),
+  ncol=1+length(levels(gapminder$continent))
+  ))
+colnames(table_gdp) = c("Année", levels(gapminder$continent))
+table_gdp$year = unique(gapminder$year)
+
+for (i in 1:length(table_gdp$year)) {
+  for (cont in 1:length(continent_vector)) {
+    table_gdp[[continent_vector[cont]]][i] = mean(gapminder[
+      year == table_gdp$year[i] & continent==continent_vector[cont]]$gdpPercap) 
+    }}
+
+graph1 = ggplot(data=table_gdp, aes(x=year))
+for (i in 1:length(continent_vector)) {
+  graph1 = graph1 + geom_line(
+    aes_string(y=continent_vector[i]), 
+    colour=colors[i],
+    size=linesize)}
+
+graph1 = graph1 + ylab("PIB par habitant") + xlab("Année") + 
+  labs(title="PIB par habitant moyen des continents, par année") + theme_rdsm
+
+table2 = gapminder[, .(continent = continent, 
+                       avg_gdpPercap = mean(gdpPercap),
+                       avg_lifeExp = mean(lifeExp))
+                   , by=.(country)]
+graph2 = ggplot(data=table2, aes(x=continent, fill=continent)) + 
+  geom_boxplot(aes(y=avg_gdpPercap))
+graph2 = graph2 + scale_y_continuous(trans="log10") + theme_rdsm +
+  ylab("log(PIB par habitant moyen)") + xlab(label="") +
+  labs(title="Distribution du PIB par habitant moyen, par continent") +
+  scale_fill_manual(values=colors) + theme_noxlabel
+
+grid.arrange(graph1, graph2, nrow=2)
+```
+
+Sur le premier graphe, on observe une hausse globale du PIB/habitant sur tous les continents sauf l'afrique. La courbe correspondant à l'amérique n'augmente pas autant que celles de l'europe et de l'océanie, mais cela vient du fait que les pays d'amérique du nord et du sud sont pris en compte ensemble.  
+
+Notons une limite de cette représentation: chaque continent n'est pas composé du même nombre de pays, et donc chaque ligne va être plus ou moins représentative du continent qu'elle représente.  
+
+Le graphique associé, en boîte à moustache, vise à illustrer cette potentielle source de biais. La première chose que l'on voit est que la distribution des PIB par habitant pour l'océanie est extrêmement concentrée. En effet, non seulement il n'y a que deux pays comptabilisés dans ce continent mais ils sont égalements très proches. On comprend donc que pour l'océanie, la ligne correspondante sur le premier graphe est bien représentative.  
+Une autre remarque: nous avions émis comme réserve précédemment que l'amérique étant composée de beaucoup de pays différents avec notamment l'amérique du nord et du sud. Il s'avère que la distribution des PIB par habitant est assez concentrée pour les amériques, suggérant une certaine homogénéité de ce point de vue comparativement à d'autres continents. Notons la variabilité extrême de l'asie qui semble avoir à la fois parmi les pays les plus riches et les plus pauvres, ramenés au nombre d'habitant.  
+Notons également que l'afrique est clairement le continent le moins bien doté, ce qui est d'autant plus flagrant lorsque l'on comprend que l'axe vertical est en échelle logarithmique. On y voit tout de même une certaine dispersion. Gardons à l'esprit que du fait de l'échelle logarithmique, l'interprétation des distances interquartiles n'est pas triviale et c'est la raison pour laquelle nous restons à une description qualitative de ces graphiques.  
+
+## Evolution des espérances de vie
+
+Nous allons maintenant effectuer une analyse similaire à celle de la section précédente. La complémentarité entre le graphique linéaire et le boxplot étant intéressante, nous allons garder la même visualisation.  
+
+```{r}
+table_le = data.table(matrix(
+  nrow=length(unique(gapminder$year)),
+  ncol=1+length(levels(gapminder$continent))
+  ))
+colnames(table_le) = c("year", levels(gapminder$continent))
+table_le$year = unique(gapminder$year)
+
+for (i in 1:length(table_le$year)) {
+  for (cont in 1:length(continent_vector)) {
+    table_le[[continent_vector[cont]]][i] = mean(gapminder[
+      year == table_le$year[i] & continent==continent_vector[cont]]$lifeExp) 
+} }
+
+graph3 = ggplot(data=table_le, aes(x=year))
+for (i in 1:length(continent_vector)) {
+  graph3 = graph3 + geom_line(
+    aes_string(y=continent_vector[i]), 
+    colour=colors[i],
+    size=linesize
+    )
+}
+
+graph3 = graph3 + ylab("Espérance de vie") +  xlab("Année") + theme_rdsm +
+  labs(title="Espérance de vie moyenne des continents, par année")
+
+graph4 = ggplot(data=table2, aes(x=continent, fill=continent)) + 
+  geom_boxplot(aes(y=avg_lifeExp)) + scale_fill_manual(values=colors) + 
+  ylab("Espérance de vie") + xlab(label="") +
+  labs(title="Distribution des espérances de vie, par continent") + 
+  theme_rdsm + theme_noxlabel
+
+grid.arrange(graph3, graph4, nrow=2)
+```
+
+Sur le premier graphique, on peut voir assez clairement une hausse de l'espérance de vie sur tous les continents. La hausse est plus faible pour l'océanie et l'europe mais cela s'explique par le fait que l'espérance de vie de leur population était déjà assez haute en 1952.  
+Sur le second graphique nous pouvons voir une distribution de l'espérance de vie moyenne à l'intérieur de chaque continent. Nous observons une grande homogénéité de l'europe et de l'océanie (pour l'océanie, toujours dû au fait qu'il n'y a que deux pays), nous indiquant que les lignes du premier graphique sont bien représentatives de l'évolution. Les dispersions des espérances de vie pour l'océanie et l'europe sont très faibles, tandis que celles pour l'afrique, les amériques et l'asie sont similaires du fait des intervalles inter-quartiles similaires. Nous pourrions vouloir supposer que cela vient du fait que plus l'espérance de vie est élevée et plus il est difficile de l'améliorer du fait de limitations biologiques et technologiques, cependant cette remarque n'explique pas tout: l'afrique a l'espérance de vie la plus faible mais son intervalle inter-quartile n'est pas le plus grand.  
+
+## Relation entre l'espérance de vie et le PIB par habitant  
+
+Nous allons maintenant nous intéresser à l'évolution de ces deux variables l'une par rapport à l'autre.   
+
+```{r}
+table_corr = gapminder[,
+                        .(continent, 
+                          avg_lifeExp = mean(lifeExp),
+                          avg_gdpPercap = mean(gdpPercap)),
+                        by=.(country)]
+
+country_name_vector = unique(gapminder$country)
+table_corr = data.table(matrix(
+  nrow = length(country_name_vector),
+  ncol = 2))
+colnames(table_corr) = c("country", "correlation")
+
+for (c in 1:length(country_name_vector)) {
+  country_name = levels(country_name_vector)[c]
+  table_corr$country[c] = country_name 
+  table_corr$correlation[c] = cor(
+    gapminder[country==country_name]$gdpPercap,
+    gapminder[country==country_name]$lifeExp)
+}
+
+table_end = merge(table_corr,
+                  unique(gapminder[,
+                                   .(continent, 
+                                     avg_lifeExp = mean(lifeExp),
+                                     avg_gdpPercap = log(mean(gdpPercap))),
+                                   by=.(country)]),
+                   by="country"
+                   )
+
+graph5 = ggplot(data=table_end, aes(x=continent, fill=continent)) + 
+  geom_boxplot(aes(y=correlation)) + 
+  scale_fill_manual(values=colors) + 
+  ylab("Corrélation") + xlab("") +
+  labs(title="Corrélations entre les PIB/hab et les espérances de vie") + 
+  theme_rdsm + theme_noxlabel
+
+LinReg_model = lm(avg_lifeExp ~ log10(avg_gdpPercap), table_end)
+standard_deviation = sd(LinReg_model$residuals) * sqrt(
+  (length(table_end$avg_lifeExp) - 1) / length(table_end$avg_lifeExp))
+
+table_end$to_label = ifelse(
+  predict(LinReg_model, data=log10(table_end$avg_gdpPercap)) - 
+    1.96*standard_deviation > table_end$avg_lifeExp, 
+  table_end$country, 
+  "")
+
+graph6 = ggplot(
+  data=table_end, 
+  aes(x=avg_gdpPercap, y=avg_lifeExp, col=continent, label=to_label)
+  ) + theme(legend.position="none")
+graph6 = graph6 + geom_text(size=2.5, vjust=1.5)
+graph6 = graph6 + geom_point(aes(y=avg_lifeExp), show.legend=FALSE)
+graph6 = graph6 + scale_x_continuous(trans="log10")
+graph6 = graph6 + xlab("log(PIB par habitant moyen)") + 
+                  ylab("Espérance de vie moyenne") + 
+                  labs(title="Pays, selon l'espérance de vie et le PIB par habitant") +
+                  scale_color_manual(values=colors) + 
+                  theme_rdsm
+graph6 = graph6 + geom_line(aes(x=avg_gdpPercap, 
+                                y=predict(LinReg_model)),
+                            color = "gray",
+                            size = 0.2)
+graph6 = graph6 + geom_line(aes(x=avg_gdpPercap, 
+                                y=predict(LinReg_model) + 1.96*standard_deviation),
+                            color = "black",
+                            size = 0.2)
+graph6 = graph6 + geom_line(aes(x=avg_gdpPercap, 
+                                y=predict(LinReg_model) - 1.96*standard_deviation),
+                            color = "black",
+                            size = 0.2)
+
+grid.arrange(graph5, graph6, nrow=2)
+```
+  
+L'afrique est le continent sur lequel les corrélations entre le PIB par habitant et l'espérance de vie sont les plus variables, et même anti-corrélées pour un quart de ses pays constituants (le premier quartile des corrélations de ses pays est à environ 0). Pour les autres continents, la distribution de ces corrélations est dans l'ensemble très forte et avec des intervalles inter-quartiles plutôt faibles, avec simplement quelques pays se distinguant par une corrélation négative.  
+
+Nous terminons avec une représentation des pays selon les critères du PIB par habitant moyen et de l'espérance de vie moyenne, et rattachés à leur continent. On peut y observer un certain nombres d'éléments que nous avions compris plus haut mais qu'il aurait été difficile d'extraire clairement à partir de ce graphique seul: les pays d'asie sont représentés sur la quasi-totalité du plan montrant beaucoup d'hétérogénéité. Les amériques sont également assez hétérogènes mais ont très peu de pays avec un PIB par habitant très faible ou une espérance de vie très faible. L'europe et l'océanie sont logés quasi-exclusivement dans le coin nord-est du graphe, montrant à la fois un haut niveau de PIB par habitant et une espérance de vie de ses habitants très bonne. Enfin, les pays d'afrique ont une espérance de vie plutôt faible mais ont des niveaux de PIB par habitant couvrant une large gamme.  
+
+L'afrique semble donc être un continent très à part quant à l'utilisation de la richesse nationale pour prendre soin de sa population. Les causes de cette observation sont probablement multiples et difficiles à correctement identifier. On pourrait supposer que des régimes politiques plus autoritaires, un certain niveau de corruption, ou une asphyxie économique liée à des difficultés de négociations sur les termes d'emprunts à d'autres nations pourraient favoriser un contexte dans lequel le pays va soit ne pas vouloir soit ne pas pouvoir allouer ses richesses à l'amélioration des conditions de vie de sa population.  
+
+Les éléments mis en lumière ici restent très vagues et ne permettent pas de prendre en compte les spécificités de chaque pays. Pour aller plus loin il faudra donc s'intéresser plus en détail au fonctionnement des pays présentant des anomalies selon notre grille de lecture. Nous pouvons chercher les pays qui s'éloignent de la droite de régression linéaire de plus de deux écart-types vers le bas, identifiant ainsi cinq pays africains et un asiatique comme "anormalement bas". Ces pays sont de bons candidats pour commencer une étude complémentaire et plus détaillée.  

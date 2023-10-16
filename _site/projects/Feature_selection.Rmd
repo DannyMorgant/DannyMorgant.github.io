@@ -1,6 +1,5 @@
 ```{r, echo=F, include=F}
 library(reticulate) 
-os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = '/home/dfuu/miniconda3/envs/ml/plugins/platforms/'
 ```
 
 # Introduction to feature selection strategies  
@@ -9,13 +8,13 @@ In this project, we will implement a few common feature selection strategies. Th
 The AR model has the form:
 $$X(t) = a_0 + a_1X(t-1) + a_2X(t-2) + ... + a_qX(t-q) + \epsilon(t)$$
 
-In which the $a_i$ are the coefficients to estimate. The goal of this project being to practice introductory feature selection strategies, we will not go through the usual time series analysis workflow with characterization of stationnarity.  
+In which the $a_i$ are the coefficients to estimate. The goal of this project being to practice introductory feature selection strategies, we will not go through the usual time series analysis workflow with characterization of stationarity.  
 
 ## Data preparation  
 
 However we still need to look at the way the data is structured and prepare it for our task.  
 
-```{python}
+```{python, comment=NA}
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -24,15 +23,15 @@ import statsmodels.api as sm
 plt.style.use("bmh")
 
 AR = np.array(pd.read_csv("AR.csv", header=None))
-print("Data shape:", AR.shape)
 N = AR.shape[0]
+print("Data shape:", AR.shape)
 ```
 
 We have 5000 observations of a single variable. In the above equation, $X(t)$ is therefore a scalar and not a vector. This simplifies the processing. In order to use a linear regression approach to find the coefficients, we will need a structure $X$ containing the data to fit and a vector containing the values $y$ to fit to. $y$ will essentially be the initial AR time series, amputed from its first 50 values. This is because to predict the *kth* value we need the values from $k-50$ to $k$, which aren't all available for $k<50$.  
 
 For convenience, we will construct a dataframe X which will contain all the $t-1, t-2, ..., t-50$ values corresponding to the *t = t-0* value as prediction target, as well as the value 1 for the fitting of $a_0$.
 
-```{python}
+```{python, comment=NA}
 colnames = ["t_"+str(i) for i in range(50, 0, -1)] + ["cst"]
 X = np.array([AR[k:k+51].T.reshape((51,)) for k in range(N-50)])
 X = pd.DataFrame(X, columns=colnames)
@@ -61,7 +60,7 @@ This way of constructing the training and test sets keeps the continuity of the 
 
 In order to simplify further code, we start by creating the datasets and building a function able to evaluate the models:
 
-```{python}
+```{python, comment=NA}
 X_train, y_train = X.iloc[:4000,:], y[:4000]
 X_test, y_test = X.iloc[4000:,:], y[4000:]
 
@@ -90,7 +89,7 @@ def eval_model(xtrain, ytrain, xtest=None, ytest=None, included=None):
 
 Best subset selection is a very straightforward approach: we simply try every possible combination of parameters until we find the best one. However with $50$ features as is the case here, this would mean testing $2^{50} = 1.12 \cdot 10^{15}$ combinations which is way too much. For computational reasons we will only try models using up to 4 features.  
 
-```{python}
+```{python, comment=NA}
 import itertools
 import time
 
@@ -119,7 +118,7 @@ When we have a model with $n$ features, we test all models with $n-1$ features a
 
 The traditional way to use backward selection is to remove features when the *pvalue* associated with them is the worst of all and stop when the worst *pvalue* is below a predefined threshold. In this implementation we use the $BIC$ for consistency reasons with other subset selection methods. Since we don't have a stopping criteria anymore, we will keep evaluating models down to $1$ feature. The selected model will be the one with the lowest overall BIC, exploiting the trade-off between ability to explain the data and model complexity that is built in the $BIC$ criteria.
 
-```{python}
+```{python, comment=NA}
 def processSubset(feature_set):
     # Fit model on feature_set and calculate RSS
     model = sm.OLS(y,X[list(feature_set)])
@@ -148,13 +147,13 @@ while(len(predictors) > 1):
     predictors = models_bwd.loc[len(predictors)-1]["model"].model.exog_names
 
 toc = time.time()
-print("Total elapsed time:", (toc-tic), "seconds.")
+to_print = "Total elapsed time: " + str(toc-tic) + " seconds."
 
 models_bwd['BIC'] = pd.to_numeric(models_bwd['BIC'])
 backward_header = models_bwd.loc[models_bwd['BIC'].argmin()]['model'].model.exog_names
 backward_bic = models_bwd.loc[models_bwd['BIC'].argmin()]['model'].bic
-print("Best model with backward selection:")
-print(f"Selected features: {','.join(X.loc[:,backward_header].columns[::-1])}\nBIC: {backward_bic:.2f}")
+print(to_print + "\nBest model with backward selection:\n" + 
+f"Selected features: {','.join(X.loc[:,backward_header].columns[::-1])}\nBIC: {backward_bic:.2f}")
 ```
 
 ## Genetic algorithm
@@ -183,7 +182,7 @@ Back to our problem at hand: selecting the best features to include in an AutoRe
 Here, the solutions are encoded as a list of bits. Each bit represents the inclusion (1) or exclusion (0) of the corresponding feature. The mutation operator flips one (or a random number of, depending on the underlying implementation of DEAP) bit randomly. The crossover operator is set to cxOnePoint, which means cutting the list in half and exchanging the left and right parts of the list between the input solutions. These are very common choices for these operators.  
 For the selection operator, we decided to use the tournament selection with a tournament size of 3. With this operator, 3 solutions are picked randomly in the population and the best one is selected and put in a list for the crossover operation. Size 3 is rather small, but this allows to select more slowly (in other words, less evolutionary pressure) and thus keep more diversity in the population, allowing a better exploration of the search space.    
 
-```{python}
+```{python, comment=NA}
 from deap import creator, base, tools, algorithms
 import random
 
@@ -249,7 +248,7 @@ def bestIndividual(hof, X, y):
 We will start with a population of 50 solutions, which will evolve over 100 generations. Because GA are a class of stochastic algorithms, the result won't allways be the same. As such we will run the algorithm 5 times and pick the best found solution.  
 This procedure is superior to simply increasing the population size or the number of generations because even if the algorithm has excellent properties in terms of space exploration, there is still some *path dependency* in that the early selected individuals will bias the exploration of the solution space towards their position. By rerunning the experiment we are reinitializing the population and therefore are less impacted by this bias (because the initial bias should be different each time). Even though we opted for a *slow* selection operator in order to help space exploration, it doesn't hurt to choose this procedure. We will print the best selected model in each run and get an idea of the variability of the results.  
 
-```{python}
+```{python, comment=NA}
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -269,9 +268,7 @@ for i in range(BOX):
     if verbose2:
         print(f"Run {i+1}: best BIC is {bestBIC[0]}, selected model:\n{','.join(bestHeader)}\n")
 
-print('\n--------------------------------------------------------')
-print(f'Overall Best BIC: \t{bestBIC[0]:.4f}')
-print('Selected features\t: ' + ",".join(bestHeader))
+print(f'Overall Best BIC: \t{bestBIC[0]:.4f}\nSelected features\t: ' + ",".join(bestHeader))
 ```
 
 We see that we have very little variability in the BIC of the selected solutions. Not shown here are runs with a higher tournament size where the results were even more diverse in terms of BIC of solutions. We impute the stability of our results to the choice of a low tournament size to reduce the competitiveness of the selection process and keep more diversity in the population, guaranteeing a better exploration of the search space.    
@@ -280,7 +277,7 @@ We see that we have very little variability in the BIC of the selected solutions
 
 We have successfully implemented a few methods of feature selection for this AR-fitting problem. An interesting part is to check how these methods fare against another. In order to properly evaluate them, we will look at their performance on the test set we extracted earlier. This set has never been used in the previous parts and we avoided leakage, so the performance of the selected models on this set should be indicative of the generalization effectiveness of the selected models.
 
-```{python}
+```{python, comment=NA}
 import numpy as np
 plt.rcParams["figure.figsize"] = (8,4)
 
@@ -322,13 +319,15 @@ ax.set_ylabel('Mean squared error')
 ax.set_title('Performances of selected models')
 ax.set_xticks(x + width, names)
 ax.legend(loc='upper left', ncols=3)
-ax.set_ylim(0.8, 1.2)
+ax.set_ylim(0.8, 1.2);
 plt.show()
 ```
 
 
 Interestingly, the performance of the selected models decreased more on the test set that the performance of the baseline model with all parameters. We identified two main possible causes for this observation:  
-- **Overfitting**: by selecting less features, the model doesn't learn information that is relevant to the whole dataset in favor of specifically targeting relevant information for the training set. As such explanatory variables that are relevant have been set aside. Geometrically, the variables that have been set aside have been so because they are close to being colinear to a vector inside the separation hyperplane (which means normal to the hyperplane defining vector, hence a factor close to 0, interpretable as almost 0 correlation with a change in the response variable). However because we kept the continuity of the data and the fact that these features aren't perfectly colinear with the separation hyperplane, the distance between them increases as we get further away from the *center* (= mean) of the training set. Since we kept as the test set the data further in the future, this divergence can explain why some important features may have not been selected: they would have been seen as important had we kept the whole dataset, or at least selected the training set randomly in the whole dataset, but we didn't for reasons explained earlier.
-- **Changes in the DGP** (Data Generating Process): When dealing with time series, we are always at risk that the phenomenon generating the data may change over time. By keeping the continuity of the data, we isolated the patterns in the first 4000 observations for training. If the patterns in the last 1000 observations are different, there is no way for the model to learn for them, and in particular the selection process will be blind to them. In this case, there is no real way to predict how the performance on the test will change (improving or decreasing) based on the complexity of the model.
+
+- **Overfitting**: by selecting less features, the model doesn't learn information that is relevant to the whole dataset in favor of specifically targeting relevant information for the training set. As such explanatory variables that are relevant have been set aside. Geometrically, the variables that have been set aside have been so because they are close to being colinear to a vector inside the separation hyperplane (which means normal to the hyperplane defining vector, hence a factor close to 0, interpretable as almost 0 correlation with a change in the response variable). However because we kept the continuity of the data and the fact that these features aren't perfectly colinear with the separation hyperplane, the distance between them increases as we get further away from the *center* (= mean) of the training set. Since we kept as the test set the data further in the future, this divergence can explain why some important features may have not been selected: they would have been seen as important had we kept the whole dataset, or at least selected the training set randomly in the whole dataset, but we didn't for reasons explained earlier.  
+
+- **Changes in the DGP** (Data Generating Process): When dealing with time series, we are always at risk that the phenomenon generating the data may change over time. By keeping the continuity of the data, we isolated the patterns in the first 4000 observations for training. If the patterns in the last 1000 observations are different, there is no way for the model to learn for them, and in particular the selection process will be blind to them. In this case, there is no real way to predict how the performance on the test will change (improving or decreasing) based on the complexity of the model.  
 
 The fact that the model with all features performed better on the test set than the models with selected features led us to propose that the former explanation is the most plausible in this case. However without knowing where the toy data that was provided comes from, we can't be sure. Also, it's not very interesting to investigate further as the interpretation couldn't be related back to a real phenomenon. The models selected by backward selection and best subset limited to 4 are also very similar. This is interesting: backward selection managed to get to a proper low-number of features model despite the small percentage of the search space it explored. Interestingly, backward selection led to the most overfitting out of the selected models.
