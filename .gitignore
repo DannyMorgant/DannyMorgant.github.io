@@ -1,3 +1,4 @@
 *.swp
 jekyll_start.sh
 .Rhistory
+*.ipynb
