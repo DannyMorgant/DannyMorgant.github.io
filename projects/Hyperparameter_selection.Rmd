@@ -1,0 +1,556 @@
+---
+title: "Hyperparameter selection"
+author: "Danny Morgant"
+date: "2023-10-15"
+output:
+  html_document:
+    theme: cosmo
+    code_folding: hide
+    toc: true
+    toc_float: true
+    df_print: paged
+---  
+
+In this project we will explore some common ensemble learning methods as well as ways to select hyperparameters, from a simple toy problem.  
+
+We will work on a dataset containing concrete characteristics, and try to predict an output variable. This is a regression problem, and we will use four different algorithms: bagging, random forests, adaboost and gradient boosting. This project should help us get an introduction to the use of these algorithms, as well as exploring some strategies for selecting hyperparameters.
+
+```{python}
+from numpy import mean
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.model_selection import KFold
+from sklearn.metrics import make_scorer, mean_squared_error
+
+plt.style.use('bmh')
+```
+
+## Data preparation
+
+```{python, comment=NA}
+# requires xlrd, see https://anaconda.org/anaconda/xlrd (installation via pip also available
+df = pd.read_excel("Concrete_Data.xls")
+y = df.iloc[:,8]
+X = df.iloc[:,list(range(8))]
+X.head()
+```
+
+```{python, comment=NA}
+X.describe()
+```
+
+All features are continuous variables, and we don't have any missing value. However the ranges are very different. We will therefore standardize all columns in the input data.  
+
+```{python}
+X=(X-X.mean())/X.std()
+```
+
+### Preparation of datasets  
+
+We plan to utilize four algorithms, optimize their hyperparameters, and perform a comparative analysis. To enable a fair comparison, we require a set for comparison purposes. Ideally, each algorithm should also have distinct training and testing sets, but this would significantly reduce the data available for training the models. Consequently, we will employ cross-validation within the non-comparison set to train the models and fine-tune the hyperparameters.
+
+As we intend to apply cross-validation to various models, it's imperative that the cross-validation process remains consistent across all of them. Thus, we will establish the cross-validation splits in advance and use the same splits for each algorithm.  
+
+```{python}
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn import model_selection  
+
+seed = 420
+n_splits = 5
+
+X0, X_compare, y0, y_compare = train_test_split(X, y, test_size=0.25, random_state=seed)
+kfold = model_selection.KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+```
+
+## Using different models
+
+All the models we will use here are ensemble methods in which weak learners, which are decision trees, have their output combined in order to produce a so-called strong learner which will give us a prediction. All these models differ in the way the weak learners are constructed, and the way their contributions are combined.  
+
+### Bagging  
+
+Bagging, which stands for bootstrap aggregating, is a method in which we will choose the individual learners as decision trees. The training set is sampled with replacement (bootstrap), and is used to construct a decision tree. In a BaggingRegressor model, the output from the individual learners is average to produce the full model's output.  
+
+There are two hyperparameters for a bagging model: the number of weak learners to introduce in the model and the size of the bootstrap samples to use to construct each of them.  
+
+```{python}
+from sklearn.ensemble import BaggingRegressor
+
+grid = dict()
+grid['n_estimators'] = [10, 20, 40, 60, 80, 120, 150, 200, 300, 400, 600, 800]
+grid['max_samples'] = [0.1*i for i in range(1, 11)]
+
+mses = np.zeros((len(grid["n_estimators"]), len(grid["max_samples"])))
+
+for i, n_estimators in enumerate(grid["n_estimators"]):
+    for j, max_samples in enumerate(grid["max_samples"]):
+        #Making explicit that we are using Bagging algorithm
+        model_bagging = BaggingRegressor(bootstrap=True, bootstrap_features=False) 
+        mses[i,j] = sum(cross_val_score(
+            model_bagging, X0, y0, cv=kfold, n_jobs=-1, scoring='neg_mean_squared_error')) / n_splits
+
+plt.rcParams["figure.figsize"] = (8, 3);
+plt.rcParams['axes.grid'] = False 
+fig = plt.figure()
+ax = fig.add_subplot(111)
+cax = ax.matshow(mses.T, interpolation='nearest', cmap='Greys')
+fig.colorbar(cax)
+
+xaxis = np.arange(len(grid["n_estimators"]))
+yaxis = np.arange(len(grid["max_samples"]))
+ax.set_xticks(xaxis)
+ax.set_yticks(yaxis)
+ax.set_xticklabels(grid["n_estimators"])
+ax.set_yticklabels([f"{0.1*i:.1f}" for i in range(1, 11)])
+ax.set_ylabel("Max samples")
+ax.set_xlabel("# Estimators")
+ax.set_title("Performance of Bagging with different hyperparameters");
+
+plt.show()
+```
+
+We used a grid search to try and find the best hyperparameters for bagging. Since there are only two of them, we can visualize them with a heatmap. We represented it it above, hoping to uncover a meaningful pattern. Unfortunately, no such relationship appears to surface. It appears that there is a complex relationship between the hyperparameters and the cost function. Consequently, it proves challenging to propose a straightforward guideline for selecting suitable initial hyperparameter values for a bagging algorithm. 
+
+```{python, comment=NA}
+hyp_argmax = np.unravel_index(np.argmax(mses), mses.shape)
+bag_params = {"n_estimators": grid['n_estimators'][hyp_argmax[0]],
+              "max_samples": grid['max_samples'][hyp_argmax[1]]}
+
+print(f"Best hyperparameters: \n\tn_estimators = {bag_params['n_estimators']}\n\
+\tmax_samples = {bag_params['max_samples']}")
+print(f"Best mean squared error: {-mses[hyp_argmax]:.3f}")
+```
+
+Examining the individual impact of each parameter in isolation wouldn't yield meaningful insights in this context, since there is no homogeneity in the search space. Our conclusions regarding the effects of increasing or decreasing a hyperparameter would change arbitrarily.
+
+### Random Forests
+
+Random forests are also an ensemble method in which the individual learners are decision trees. In random forests, the totality of the training set but only a subset of the features are used to train each decision tree. The final estimation again is produced by averaging the predictions of each tree.  
+
+In random forests, there are a number of hyperparameters. We decided do find the best combination of four of them. The number of estimators to use in the model is the first one, and is common to all methods we will use in this document. The number of features to use is the first characteristic of random forests. For the construction of each tree we will also try to find optimal values for its maximum depth as well as the number of points to be present in a group after division for this group to be considered a leaf.  
+
+Hyperparameter optimization through grid search is acknowledged to be highly inefficient. A commonly used alternative search method is randomized search, which involves testing random hyperparameter combinations and selecting the best-performing one. We start with the standard grid-search:
+
+```{python, comment=NA}
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+import time
+
+grid = dict()
+grid['n_estimators'] = [10, 25, 50, 100, 200, 400, 800]
+grid['max_features'] = list(range(2, 9))
+grid['max_depth'] = [2, 3, 5, 8, 12, None]
+grid['min_samples_leaf'] = [2, 3, 4]
+
+model_rf = RandomForestRegressor()
+tic = time.time()
+grid_search = GridSearchCV(estimator=model_rf, param_grid=grid, n_jobs=-1, cv=kfold, scoring='neg_mean_squared_error')
+grid_result = grid_search.fit(X0, y0)
+print(f"Grid search performed in {time.time() - tic:.0f}s")
+
+print("Best: %f using:" % (-grid_result.best_score_))
+for k, v in grid_result.best_params_.items():
+    print(f"\t{k}: {v}")
+# summarize all scores that were evaluated
+means = grid_result.cv_results_['mean_test_score']
+stds = grid_result.cv_results_['std_test_score']
+params = grid_result.cv_results_['params']
+```
+
+Random search being a very popular alternative to grid search, this is the approach we try next:  
+
+```{python, comment=NA}
+model_rf = RandomForestRegressor()
+
+tic = time.time()
+rando_search = RandomizedSearchCV(estimator=model_rf, param_distributions=grid, cv=kfold,
+                                  n_iter=500, n_jobs=-1, scoring='neg_mean_squared_error')
+rando_result = rando_search.fit(X0, y0)
+print(f"Randomized search performed in {time.time() - tic:.0f}s\n")
+print("Best: %f using:" % (-rando_result.best_score_))
+for k, v in rando_result.best_params_.items():
+    print(f"\t{k}: {v}")
+# summarize all scores that were evaluated
+means = rando_result.cv_results_['mean_test_score']
+stds = rando_result.cv_results_['std_test_score']
+params = rando_result.cv_results_['params']
+```
+
+Another intriguing avenue for hyperparameter optimization is the utilization of stochastic optimization algorithms. For the sake of broadening our experience with this category of algorithms, and since we already used genetic algorithms in a previous project, we have chosen to explore particle swarm optimization (PSO), which belongs to the category of swarm intelligence algorithms. PSO operates on a straightforward principle. Initially, a set of potential solutions is established and scattered across the search space, each having its own position and velocity. At each time-step, these solutions adjust their positions based on their velocities and update their velocities, which can be influenced by their "best seen position" or the global "best seen position" (or both) with respect to a function of their coordinates. In this context, the function of their coordinates can be a classifier, and the coordinates represent hyperparameters. The evolution of the algorithm can be likened to a swarm that gradually converges and explores around various local solutions. One distinctive feature of PSO, as opposed to GA, is that PSO particles maintain a record of their best previous positions, ensuring that the best solution discovered so far can only be enhanced over iterations.  
+
+Given that the *deap* package can also be employed to implement PSO, we will use it for this purpose.
+
+```{python}
+import operator
+import random
+from deap import base, creator, tools
+import math
+
+grid = dict()
+grid['n_estimators'] = [10, 25, 50, 100, 200, 400, 800]
+grid['max_features'] = list(range(2, 9))
+grid['max_depth'] = [2, 3, 5, 8, 12]
+grid['min_samples_leaf'] = [2, 3, 4]
+
+# Creating the particles
+creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
+creator.create("Particle", list, fitness=creator.FitnessMin, speed=list, 
+    smin=None, smax=None, best=None, grid=grid)
+
+
+def generate(size, smin, smax):
+    # Particles will have a number between 0 and 1 which will be converted into the parameters
+    # at evaluation time
+    part = creator.Particle(random.random() for _ in range(size)) 
+    part.speed = [random.uniform(smin, smax) for _ in range(size)]
+    part.smin = smin
+    part.smax = smax
+    return part
+
+
+def scale_back(x, label, type="linear"):
+    if type=="linear":
+        return math.floor(grid[label][0] + x*(grid[label][-1] - grid[label][0]))
+    # For values where relative augmentations make more sense
+    if type=="log":
+        return math.floor(grid[label][-1]**x + grid[label][0] - 1)
+
+
+def evaluate_rf(part):
+    # Extracting particle parameters
+    n_estimators = scale_back(part[0], "n_estimators", type="log")
+    max_features = scale_back(part[1], "max_features")
+    max_depth = scale_back(part[2], "max_depth")
+    min_samples_leaf = scale_back(part[3], "min_samples_leaf")
+    # Evaluating the model
+    model_rf = RandomForestRegressor()
+    return sum(cross_val_score(model_rf, X0, y0, cv=kfold, 
+                               scoring='neg_mean_squared_error', n_jobs=-1))/n_splits,
+
+
+def updateParticle(part, best, phi1, phi2):
+    # Computing speed towards personal best and global best positions
+    u1 = (random.uniform(0, phi1) for _ in range(len(part)))
+    u2 = (random.uniform(0, phi2) for _ in range(len(part)))
+    v_u1 = map(operator.mul, u1, map(operator.sub, part.best, part))
+    v_u2 = map(operator.mul, u2, map(operator.sub, best, part))
+    part.speed = list(map(operator.add, part.speed, map(operator.add, v_u1, v_u2)))
+    for i, speed in enumerate(part.speed):
+        if abs(speed) < part.smin:
+            part.speed[i] = math.copysign(part.smin, speed)
+        elif abs(speed) > part.smax:
+            part.speed[i] = math.copysign(part.smax, speed)
+    # Moving the particle, making sure the coordinates stay in the 0-1 range
+    part[:] = list(map(operator.add, part, part.speed))
+    part[:] = list(map(lambda x: min(max(x, 0), 1), part))
+    # Updating the speed boundaries to help the particles to slow down and converge closer to local minima
+    part.smin *= 0.95
+    part.smax *= 0.95
+```
+
+```{python, comment=NA}
+toolbox = base.Toolbox()
+toolbox.register("particle", generate, size=4, smin=-0.3, smax=0.3)
+toolbox.register("population", tools.initRepeat, list, toolbox.particle)
+toolbox.register("update", updateParticle, phi1=2.0, phi2=2.0)
+toolbox.register("evaluate", evaluate_rf)
+
+pop = toolbox.population(n=15)
+stats = tools.Statistics(lambda ind: ind.fitness.values)
+stats.register("avg", np.mean)
+stats.register("std", np.std)
+stats.register("min", np.min)
+stats.register("max", np.max)
+
+logbook = tools.Logbook()
+logbook.header = ["gen", "evals"] + stats.fields
+
+GEN = 25
+best = None
+
+tic = time.time()
+
+for g in range(GEN):
+    for part in pop:
+        part.fitness.values = toolbox.evaluate(part)
+        if not part.best or part.best.fitness > part.fitness:
+            part.best = creator.Particle(part)
+            part.best.fitness.values = part.fitness.values
+        if not best or best.fitness > part.fitness:
+            best = creator.Particle(part)
+            best.fitness.values = part.fitness.values
+    for part in pop:
+        toolbox.update(part, best)
+    # Gather all the fitnesses in one list and print the stats
+    logbook.record(gen=g, evals=len(pop), **stats.compile(pop))
+    print(logbook.stream)
+
+print(f"Optimized in {time.time() - tic:.0f}s\n")  
+
+rf_params = [scale_back(best[0], "n_estimators", type="log")]
+rf_params = rf_params + [scale_back(e, lab) for lab, e in zip(("max_features", "max_depth", "min_samples_leaf"), best[1:])]
+rf_params = {lab: e for lab, e in zip(("n_estimators", "max_features", "max_depth", "min_samples_leaf"), rf_params)}
+print("Best parameters:")
+for k, v in rf_params.items(): print(f"\t{k}: {v}")
+print("With associated mean squared error:", -pd.DataFrame(logbook)["max"].max())
+```
+
+PSO performs the best: it is both quite fast to find good regions of the search space and spends a lot of time exploring around the local minimas. As a result, not many iterations are necessary and the algorithm becomes quite fast. It also outperformed grid-search, which is somewhat counterintuitive at first as we could expect grid search to behave kind of like a brute-force search. It happens that the exploration performed by grid search is actually very inefficient. This result is particularly impressive as we used close to the most naive implementation of PSO. the only thing we added to the most naive approach is a decay factor on the speed of particles, so that they gravitate closer and closer to the local minimas as the generation increases. We might consider researching more on this approach in the future.   
+
+#### Impact of hyperparameters  
+
+In order to assess how the hyperparameters impact the fitting of the model, we will make a few plots. We will make the hyperparameters vary from the optimal position. This is because we can't be sure if the impact of hyperparameters will be the same if we are far from a good model, so we thought that the best *place* to assess the impact was close to the optimal values.  
+
+```{python, comment=NA}
+def get_models_rf(choice):
+    n_best = rf_params['n_estimators']
+    ft_best = rf_params['max_features']
+    depth_best = rf_params['max_depth']
+    msl_best = rf_params['min_samples_leaf']
+    models = dict()
+    n_trees = list(range(10,n_best,10)) + list(range(n_best,1000,100)) + list(range(1000,5000,1000))
+    if choice == 'estimators' :
+        for n in n_trees:
+            models[str(n)] = RandomForestRegressor(n_estimators=n, min_samples_leaf= msl_best ,max_depth = depth_best, max_features=ft_best )
+    elif choice == 'msl' :
+        for i in range(1,5):
+            key = '%.4f' % i
+            models[key] = RandomForestRegressor(min_samples_leaf= msl_best , n_estimators= n_best, max_depth = depth_best , max_features=ft_best  )
+    elif choice == 'depth' :
+        for i in range(1,11):
+            models[str(i)] = RandomForestRegressor(max_depth=i,min_samples_leaf= msl_best ,n_estimators= n_best , max_features=ft_best )
+    elif choice == 'features' :
+        for i in [None, 1,2,3,4,5,6]:
+            models[str(i)] = RandomForestRegressor(max_features=i ,max_depth=depth_best,min_samples_leaf= msl_best ,n_estimators= n_best)
+    return models  
+  
+  
+def evaluate_model(model, X,y):
+    cv = KFold(n_splits=10)
+    mse_scorer = make_scorer(mean_squared_error, greater_is_better=False)
+    scores = -cross_val_score(model, X, y, scoring= mse_scorer, cv=cv, n_jobs=-1)
+    return scores
+  
+  
+from sklearn.model_selection import train_test_split 
+
+for i in ['depth','features','msl','estimators']:
+    models = get_models_rf(i)
+    results, names = list(), list()
+    for name, model in models.items():
+        scores = evaluate_model(model, X,y)
+        results.append(scores)
+        names.append(name)
+        #print('>%s %.3f' % (name, np.mean(scores)))
+    plt.boxplot(results, labels=names, showmeans=True)
+    plt.title(f'Mean Squared Error depending on the value of the {i}')
+    plt.show()
+```
+
+For each parameter, we take different value of it and compute the mean squared error on the model we got, making sure that the other parameters are set to the best value we found before.  
+We can see that the bigger the depth is, the better the model is performing. This is not true for other parameters. In particular, increasing min sample leafs seems to deteriorate the model, indicating that random forests just perform better if they are allowed to make *smaller* leaves.  
+When we play with the number of estimators, we can see that at a time, performances are becoming more stable, and, even if we increase the number of estimator, MSE isn't necessary lower.   
+
+### AdaBoost
+
+AdaBoost, standing for adaptive boosting, is another ensemble learning method. The particularity of adaboost is the method by which the weak learners are constructed: each point in the dataset is assigned a weight, uniform at first. Then each time a weak learner is trained, the weights of the points are updated in order to give more weight to the points that are badly predicted by the model and less weight to those that are well predicted. The idea is that subsequent weak learners will be incentivized to learn patterns that have not been already learnt by the previous weak learners, hopefully improving the quality of the model as a whole.  
+
+#### Optimization of hyperparameters
+
+In AdaBoost, the two most important hyperparameters are the number of weak learners to use and the learning rate, which translates as how much to reweight the points after each weak learner has been constructed. We will optimize over them by using a grid search approach, as it was the approach suggested for this document.    
+
+```{python}
+from sklearn.ensemble import AdaBoostRegressor
+
+grid = dict()
+grid['n_estimators'] = [10, 25, 50, 100, 200, 400, 800]
+grid['learning_rate'] = [2**i for i in range(-3, 2)]
+
+mses_ada = np.zeros((len(grid["n_estimators"]), len(grid["learning_rate"])))
+
+for i, n_estimators in enumerate(grid["n_estimators"]):
+    for j, learning_rate in enumerate(grid["learning_rate"]):
+        model_ada = AdaBoostRegressor(n_estimators=n_estimators, learning_rate=learning_rate) #Making explicit that we are using Bagging algorithm
+        mses_ada[i,j] = sum(cross_val_score(
+            model_ada, X0, y0, cv=kfold, n_jobs=-1, scoring='neg_mean_squared_error')) / n_splits
+
+plt.rcParams["figure.figsize"] = (8, 4);
+plt.rcParams['axes.grid'] = False 
+fig = plt.figure()
+ax = fig.add_subplot(111)
+cax = ax.matshow(-mses_ada.T, interpolation='nearest', cmap='Greys')
+fig.colorbar(cax)
+
+xaxis = np.arange(len(grid["n_estimators"]))
+yaxis = np.arange(len(grid["learning_rate"]))
+ax.set_xticks(xaxis)
+ax.set_yticks(yaxis)
+ax.set_xticklabels(grid["n_estimators"])
+ax.set_yticklabels(grid["learning_rate"])
+ax.set_ylabel("Learning rate")
+ax.set_xlabel("# Estimators")
+ax.set_title("Performance of AdaBoost with different hyperparameters");
+
+plt.show() 
+```
+
+```{python, comment=NA}
+hyp_argmax = np.unravel_index(np.argmax(mses_ada), mses_ada.shape)
+ada_params = {"n_estimators": grid['n_estimators'][hyp_argmax[0]],
+              "learning_rate": grid['learning_rate'][hyp_argmax[1]]}
+
+print(f"Best hyperparameters: \n\tn_estimators = {ada_params['n_estimators']}\n\
+\tlearning_rate = {ada_params['learning_rate']}")
+print(f"Best mean squared error: {-mses_ada[hyp_argmax]:.3f}")
+```
+
+#### Impact of hyperparameters
+
+From the above heatmap, we see quite well that using more weak learners in the model will perform better with a slow learning rate, and to the contrary a higher learning rate pairs best with less weak learners in the model. There also is a *sweet spot* somewhere as from the above, with the best performing pairs being close together at (400, 0.25) and (200, 0.5).  
+
+Unfortunately, it seems that adaboost doesn't perform very well on this problem, with a mean squared error almost twice as high as other models.   
+
+### Gradient boosting
+
+Gradient boosting or GBM (gradient boosting models) is an extension of AdaBoost models. Its generalization comes from the fact that it allows optimization of an arbitrary differentiable loss function. At each step, the collective error given by the previously constructed weak learners is computed, and the next weak learner is constructed to minimize this residual.  
+
+#### Optimization of hyperparameters
+
+For GBM we decided to optimize the number of weak learners in the model, the learning rate which again represents how much a new learner tries to correct the current residual, and since we are using decision trees as weak learners we also included their max depth. Once again, we will try to find the best set with a grid search.   
+
+```{python, comment=NA}
+from sklearn.ensemble import GradientBoostingRegressor  
+
+grid = dict()
+grid['n_estimators'] = [5*i for i in range(1,16)]
+grid['learning_rate'] = [2**i for i in range(-7, 4)]
+grid['max_depth'] = [3, 4, 5, 6, 7, 8]
+
+model_GB = GradientBoostingRegressor()
+tic = time.time()
+grid_search = GridSearchCV(estimator=model_GB, param_grid=grid, 
+                           n_jobs=-1, cv=kfold, scoring='neg_mean_squared_error')
+GB_params = grid_search.fit(X0, y0)
+print(f"Grid search performed in {time.time() - tic:.0f}s")
+```
+
+```{python, comment=NA}
+print(GB_params.best_params_)
+```
+
+```{python, comment=NA}
+model_GB = GradientBoostingRegressor(**GB_params.best_params_)
+CVmse = cross_val_score(model_GB, X0, y0, cv=kfold, scoring='neg_mean_squared_error')
+print(f"Average mean squared error for GBM: {-sum(CVmse)/n_splits:.2f}")
+```
+
+The first thing we observe right off the bat is how fast these algorithms were trained. This can be explained with the low number of estimators we used. We couldn't use more than 80 as the training phase produced overflow errors. The other very promising thing is the low cross-validation error of the selected model. We will see in the last part if this model is robust to overfitting.  
+
+#### Impact of hyperparameters  
+
+```{python}
+def get_models_GB(choice):
+    n_best = GB_params.best_params_['n_estimators']
+    rate_best = GB_params.best_params_['learning_rate']
+    depth_best = GB_params.best_params_['max_depth']
+    models = dict()
+    n_trees = list(range(10,n_best,10)) + list(range(n_best,1000,100)) + list(range(1000,5000,1000))
+    if choice == 'estimators' :
+        for n in n_trees:
+            models[str(n)] = GradientBoostingRegressor(n_estimators=n, learning_rate = rate_best,max_depth = depth_best )
+    elif choice == 'rates' :
+        for i in [0.0001, 0.001, 0.01, 0.1, 0.2, 0.3,1.0]:
+            key = '%.4f' % i
+            models[key] = GradientBoostingRegressor(learning_rate=i, n_estimators= n_best, max_depth = depth_best )
+    elif choice == 'depth' :
+        for i in range(1,11):
+            models[str(i)] = GradientBoostingRegressor(max_depth=i,learning_rate = rate_best,n_estimators= n_best)
+    return models
+
+
+for i in ['depth','rates','estimators']:
+    models = get_models_GB(i)
+    results, names = list(), list()
+    for name, model in models.items():
+        scores = evaluate_model(model, X, y)
+        results.append(scores)
+        names.append(name)
+    plt.boxplot(results, labels=names, showmeans=True)
+    plt.title(f'Mean Squared Error depending on the value of the {i}')
+    plt.show()
+```
+
+As we did in the Random Forest part, to see the impact of every hyper parameter, we fix others and play with one.  
+We can see that increase the value of the depth isn't necessary since, after 5, MSE is increasing too.  
+Also, we can conclude the same way with the learning rate, after 0.1, the model isn't performing better. 
+As when we used the Random Forest, we can see that at a time, performances are becoming more stable, and, even if we increase the number of estimator, MSE isn't necessary lower.  
+
+## Comparison of models
+
+We could select a good set of hyperparameters for each previous ensemble method. We will now compare them. For this, we will train the models with the best hyperparameters found on the whole training set, and compare their mean squared errors on the leftover *compare set*:  
+
+```{python}
+plt.rcParams["figure.figsize"] = (8,4)
+
+names = ["Training set", "Test set"]
+model_mses = {"Bagging": [], 
+              "Random forest": [], 
+              "AdaBoost": [],
+              "Gradient boosting": []
+             }
+
+# Evaluating the selected models
+model_bagging = BaggingRegressor(bootstrap=True, bootstrap_features=False, **bag_params) 
+model_bagging = model_bagging.fit(X0, y0)
+y0_pred = model_bagging.predict(X0)
+y_pred = model_bagging.predict(X_compare)
+model_mses["Bagging"].append(mean_squared_error(y0_pred, y0))
+model_mses["Bagging"].append(mean_squared_error(y_pred, y_compare))
+
+model_rf = RandomForestRegressor(**rf_params)
+model_rf = model_rf.fit(X0, y0)
+y0_pred = model_rf.predict(X0)
+y_pred = model_rf.predict(X_compare)
+model_mses["Random forest"].append(mean_squared_error(y0_pred, y0))
+model_mses["Random forest"].append(mean_squared_error(y_pred, y_compare))
+
+model_ada = AdaBoostRegressor(**ada_params)
+model_ada = model_ada.fit(X0, y0)
+y0_pred = model_ada.predict(X0)
+y_pred = model_ada.predict(X_compare)
+model_mses["AdaBoost"].append(mean_squared_error(y0_pred, y0))
+model_mses["AdaBoost"].append(mean_squared_error(y_pred, y_compare))
+
+model_GB = GradientBoostingRegressor(**GB_params.best_params_)
+model_GB = model_GB.fit(X0, y0)
+y0_pred = model_GB.predict(X0)
+y_pred = model_GB.predict(X_compare)
+model_mses["Gradient boosting"].append(mean_squared_error(y0_pred, y0))
+model_mses["Gradient boosting"].append(mean_squared_error(y_pred, y_compare))
+
+x = np.arange(len(names))
+width = 0.15
+multiplier = 0
+
+fig, ax = plt.subplots(layout='constrained')
+for attribute, measurement in model_mses.items():
+    offset = width * multiplier
+    rects = ax.bar(x + offset, measurement, width, label=attribute)
+    ax.bar_label(rects, padding=3)
+    multiplier += 1
+
+ax.set_ylabel('Mean squared error')
+ax.set_title('Performances of selected models')
+ax.set_xticks(x + width, names)
+ax.legend(loc='upper left', ncol=3)
+plt.show()
+```
+
+We observe that all methods display signs of overfitting. Among the models, the gradient boosting algorithm shows the most pronounced overfitting. Nevertheless, gradient boosting also outperforms all other algorithms significantly. Despite its overfitting tendencies, its mean squared error on the comparison set is only half that of the next algorithm. Remarkably, it achieves an exceptionally low error on the training dataset. This algorithm appears to excel in learning the training data while also demonstrating resistance to overfitting.
+
+In summary, it's evident that gradient boosting performs exceptionally well in comparison to the other methods. Additionally, it's noteworthy that it was the fastest algorithm for training and hyperparameter search by an order of magnitude.
+
+The underperformance of AdaBoost, especially on the training set, appears perplexing. Either we may have overlooked a crucial parameter setting in its configuration, or the algorithm might not be well-suited for the given regression problem for some unexplained reason.
