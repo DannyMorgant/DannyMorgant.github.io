@@ -85,7 +85,9 @@ mses = np.zeros((len(grid["n_estimators"]), len(grid["max_samples"])))
 for i, n_estimators in enumerate(grid["n_estimators"]):
     for j, max_samples in enumerate(grid["max_samples"]):
         #Making explicit that we are using Bagging algorithm
-        model_bagging = BaggingRegressor(bootstrap=True, bootstrap_features=False) 
+        model_bagging = BaggingRegressor(bootstrap=True, bootstrap_features=False,
+                                         n_estimators=n_estimators,
+                                         max_samples=max_samples) 
         mses[i,j] = sum(cross_val_score(
             model_bagging, X0, y0, cv=kfold, n_jobs=-1, scoring='neg_mean_squared_error')) / n_splits
 
@@ -184,7 +186,7 @@ Another intriguing avenue for hyperparameter optimization is the utilization of 
 
 Given that the *deap* package can also be employed to implement PSO, we will use it for this purpose.
 
-```{python}
+```{python, comment=NA}
 import operator
 import random
 from deap import base, creator, tools
@@ -377,7 +379,8 @@ mses_ada = np.zeros((len(grid["n_estimators"]), len(grid["learning_rate"])))
 
 for i, n_estimators in enumerate(grid["n_estimators"]):
     for j, learning_rate in enumerate(grid["learning_rate"]):
-        model_ada = AdaBoostRegressor(n_estimators=n_estimators, learning_rate=learning_rate) #Making explicit that we are using Bagging algorithm
+        model_ada = AdaBoostRegressor(n_estimators=n_estimators,
+                                      learning_rate=learning_rate)
         mses_ada[i,j] = sum(cross_val_score(
             model_ada, X0, y0, cv=kfold, n_jobs=-1, scoring='neg_mean_squared_error')) / n_splits
 
