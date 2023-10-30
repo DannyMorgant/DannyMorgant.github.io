@@ -111,7 +111,7 @@ ax.set_title("Performance of Bagging with different hyperparameters");
 plt.show();
 ```
 
-We used a grid search to try and find the best hyperparameters for bagging. Since there are only two of them, we can visualize them with a heatmap. We represented it it above, hoping to uncover a meaningful pattern. Unfortunately, no such relationship appears to surface. It appears that there is a complex relationship between the hyperparameters and the cost function. Consequently, it proves challenging to propose a straightforward guideline for selecting suitable initial hyperparameter values for a bagging algorithm. 
+We used a grid search to try and find the best hyperparameters for bagging. Since there are only two of them, we can visualize them with a heatmap. We represented it it above, hoping to uncover a meaningful pattern. It appears that increasing the *max_samples*, meaning the size of the samples to bootstrap, helps the algorithm. However there seem to be a sweet spot for the number of estimators to build.  
 
 ```{python, comment=NA}
 hyp_argmax = np.unravel_index(np.argmax(mses), mses.shape)
@@ -124,7 +124,6 @@ printstring = f"Best hyperparameters: \n\tn_estimators = {bag_params['n_estimato
 print(printstring + f"\nBest mean squared error: {-mses[hyp_argmax]:.3f}")
 ```
 
-Examining the individual impact of each parameter in isolation wouldn't yield meaningful insights in this context, since there is no homogeneity in the search space. Our conclusions regarding the effects of increasing or decreasing a hyperparameter would change arbitrarily.
 
 ### Random Forests
 
