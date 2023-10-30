@@ -36,10 +36,7 @@ plt.style.use('bmh')
 df = pd.read_excel("Concrete_Data.xls")
 y = df.iloc[:,8]
 X = df.iloc[:,list(range(8))]
-X.head()
-```
-
-```{python, comment=NA}
+#X.head()
 X.describe()
 ```
 
@@ -97,19 +94,19 @@ plt.rcParams['axes.grid'] = False
 fig = plt.figure()
 ax = fig.add_subplot(111)
 cax = ax.matshow(mses.T, interpolation='nearest', cmap='Greys')
-fig.colorbar(cax)
+fig.colorbar(cax);
 
 xaxis = np.arange(len(grid["n_estimators"]))
 yaxis = np.arange(len(grid["max_samples"]))
 ax.set_xticks(xaxis)
 ax.set_yticks(yaxis)
-ax.set_xticklabels(grid["n_estimators"])
-ax.set_yticklabels([f"{0.1*i:.1f}" for i in range(1, 11)])
-ax.set_ylabel("Max samples")
-ax.set_xlabel("# Estimators")
+ax.set_xticklabels(grid["n_estimators"]);
+ax.set_yticklabels([f"{0.1*i:.1f}" for i in range(1, 11)]);
+ax.set_ylabel("Max samples");
+ax.set_xlabel("# Estimators");
 ax.set_title("Performance of Bagging with different hyperparameters");
 
-plt.show()
+plt.show();
 ```
 
 We used a grid search to try and find the best hyperparameters for bagging. Since there are only two of them, we can visualize them with a heatmap. We represented it it above, hoping to uncover a meaningful pattern. Unfortunately, no such relationship appears to surface. It appears that there is a complex relationship between the hyperparameters and the cost function. Consequently, it proves challenging to propose a straightforward guideline for selecting suitable initial hyperparameter values for a bagging algorithm. 
@@ -119,9 +116,10 @@ hyp_argmax = np.unravel_index(np.argmax(mses), mses.shape)
 bag_params = {"n_estimators": grid['n_estimators'][hyp_argmax[0]],
               "max_samples": grid['max_samples'][hyp_argmax[1]]}
 
-print(f"Best hyperparameters: \n\tn_estimators = {bag_params['n_estimators']}\n\
-\tmax_samples = {bag_params['max_samples']}")
-print(f"Best mean squared error: {-mses[hyp_argmax]:.3f}")
+# Store all prints in a string to fix rendering issues
+printstring = f"Best hyperparameters: \n\tn_estimators = {bag_params['n_estimators']}\n\
+\tmax_samples = {bag_params['max_samples']}"
+print(printstring + f"\nBest mean squared error: {-mses[hyp_argmax]:.3f}")
 ```
 
 Examining the individual impact of each parameter in isolation wouldn't yield meaningful insights in this context, since there is no homogeneity in the search space. Our conclusions regarding the effects of increasing or decreasing a hyperparameter would change arbitrarily.
@@ -149,11 +147,12 @@ model_rf = RandomForestRegressor()
 tic = time.time()
 grid_search = GridSearchCV(estimator=model_rf, param_grid=grid, n_jobs=-1, cv=kfold, scoring='neg_mean_squared_error')
 grid_result = grid_search.fit(X0, y0)
-print(f"Grid search performed in {time.time() - tic:.0f}s")
 
-print("Best: %f using:" % (-grid_result.best_score_))
+printstring = f"Grid search performed in {time.time() - tic:.0f}s"
+printstring += "\nBest: %f using:" % (-grid_result.best_score_)
 for k, v in grid_result.best_params_.items():
-    print(f"\t{k}: {v}")
+    printstring += f"\n\t{k}: {v}"
+print(printstring)
 # summarize all scores that were evaluated
 means = grid_result.cv_results_['mean_test_score']
 stds = grid_result.cv_results_['std_test_score']
@@ -166,13 +165,15 @@ Random search being a very popular alternative to grid search, this is the appro
 model_rf = RandomForestRegressor()
 
 tic = time.time()
-rando_search = RandomizedSearchCV(estimator=model_rf, param_distributions=grid, cv=kfold,
-                                  n_iter=500, n_jobs=-1, scoring='neg_mean_squared_error')
+rando_search = RandomizedSearchCV(estimator=model_rf, 
+                  param_distributions=grid, cv=kfold, n_iter=500, n_jobs=-1,
+                  scoring='neg_mean_squared_error')
 rando_result = rando_search.fit(X0, y0)
-print(f"Randomized search performed in {time.time() - tic:.0f}s\n")
-print("Best: %f using:" % (-rando_result.best_score_))
+printstring = f"Randomized search performed in {time.time() - tic:.0f}s\n"
+printstring += "\nBest: %f using:" % (-rando_result.best_score_)
 for k, v in rando_result.best_params_.items():
-    print(f"\t{k}: {v}")
+    printstring += f"\n\t{k}: {v}"
+print(printstring)
 # summarize all scores that were evaluated
 means = rando_result.cv_results_['mean_test_score']
 stds = rando_result.cv_results_['std_test_score']
@@ -194,11 +195,6 @@ grid['n_estimators'] = [10, 25, 50, 100, 200, 400, 800]
 grid['max_features'] = list(range(2, 9))
 grid['max_depth'] = [2, 3, 5, 8, 12]
 grid['min_samples_leaf'] = [2, 3, 4]
-
-# Creating the particles
-creator.create("FitnessMax", base.Fitness, weights=(1.0,)) # Max because using -MSE
-creator.create("Particle", list, fitness=creator.FitnessMax, speed=list, 
-    smin=None, smax=None, best=None, grid=grid)
 
 
 def generate(size, smin, smax):
@@ -250,11 +246,16 @@ def updateParticle(part, best, phi1, phi2):
     # Updating the speed boundaries to help the particles to slow down and converge closer to local minima
     part.smin *= 0.95
     part.smax *= 0.95
-```
-
-```{python, comment=NA}
+    
+    
+# Performing PSO 
 GEN = 25
 POP = 15
+
+# Creating the particles
+creator.create("FitnessMax", base.Fitness, weights=(1.0,)) # Max because using -MSE
+creator.create("Particle", list, fitness=creator.FitnessMax, speed=list, 
+    smin=None, smax=None, best=None, grid=grid)
 
 toolbox = base.Toolbox()
 toolbox.register("particle", generate, size=4, smin=-0.3, smax=0.3)
@@ -272,6 +273,7 @@ stats.register("max", np.max)
 logbook = tools.Logbook()
 logbook.header = ["gen", "evals"] + stats.fields
 
+printstring = "\n"
 best = None
 tic = time.time()
 for g in range(GEN):
@@ -289,14 +291,15 @@ for g in range(GEN):
     logbook.record(gen=g, evals=len(pop), **stats.compile(pop))
     print(logbook.stream)
 
-print(f"Optimized in {time.time() - tic:.0f}s\n")  
+printstring += f"\nOptimized in {time.time() - tic:.0f}s\n"  
 
 rf_params = [scale_back(best[0], "n_estimators", type="log")]
 rf_params = rf_params + [scale_back(e, lab) for lab, e in zip(("max_features", "max_depth", "min_samples_leaf"), best[1:])]
 rf_params = {lab: e for lab, e in zip(("n_estimators", "max_features", "max_depth", "min_samples_leaf"), rf_params)}
-print("Best parameters:")
-for k, v in rf_params.items(): print(f"\t{k}: {v}")
-print("With associated mean squared error:", -pd.DataFrame(logbook)["max"].max())
+printstring += "\nBest parameters:"
+for k, v in rf_params.items(): printstring += f"\n\t{k}: {v}"
+printstring += f"\nWith associated mean squared error: {-pd.DataFrame(logbook)['max'].max():.3f}"
+print(printstring)
 ```
 
 PSO performs the best: it is both quite fast to find good regions of the search space and spends a lot of time exploring around the local minimas. As a result, not many iterations are necessary to find a decent solution, and it can still be run longer to keep improving it. It also outperformed grid-search, which is somewhat counterintuitive at first as we could expect grid search to behave kind of like a brute-force search. It happens that the exploration performed by grid search is actually very inefficient. This result is particularly impressive as we used close to the most naive implementation of PSO. the only thing we added to the most naive approach is a decay factor on the speed of particles, so that they gravitate closer and closer to the local minimas as the generation increases. We might consider researching more on this approach in the future.   
@@ -383,7 +386,7 @@ plt.rcParams['axes.grid'] = False
 fig = plt.figure()
 ax = fig.add_subplot(111)
 cax = ax.matshow(-mses_ada.T, interpolation='nearest', cmap='Greys')
-fig.colorbar(cax)
+fig.colorbar(cax);
 
 xaxis = np.arange(len(grid["n_estimators"]))
 yaxis = np.arange(len(grid["learning_rate"]))
@@ -403,9 +406,9 @@ hyp_argmax = np.unravel_index(np.argmax(mses_ada), mses_ada.shape)
 ada_params = {"n_estimators": grid['n_estimators'][hyp_argmax[0]],
               "learning_rate": grid['learning_rate'][hyp_argmax[1]]}
 
-print(f"Best hyperparameters: \n\tn_estimators = {ada_params['n_estimators']}\n\
-\tlearning_rate = {ada_params['learning_rate']}")
-print(f"Best mean squared error: {-mses_ada[hyp_argmax]:.3f}")
+printstring = f"Best hyperparameters: \n\tn_estimators = {ada_params['n_estimators']}\n\
+\tlearning_rate = {ada_params['learning_rate']}"
+print(printstring + f"\nBest mean squared error: {-mses_ada[hyp_argmax]:.3f}")
 ```
 
 #### Impact of hyperparameters
@@ -435,17 +438,11 @@ tic = time.time()
 grid_search = GridSearchCV(estimator=model_GB, param_grid=grid, 
                            n_jobs=-1, cv=kfold, scoring='neg_mean_squared_error')
 GB_params = grid_search.fit(X0, y0)
-print(f"Grid search performed in {time.time() - tic:.0f}s")
-```
-
-```{python, comment=NA}
-print(GB_params.best_params_)
-```
-
-```{python, comment=NA}
+printstring = f"Grid search performed in {time.time() - tic:.0f}s\n"
+printstring += str(GB_params.best_params_)
 model_GB = GradientBoostingRegressor(**GB_params.best_params_)
 CVmse = cross_val_score(model_GB, X0, y0, cv=kfold, scoring='neg_mean_squared_error')
-print(f"Average mean squared error for GBM: {-sum(CVmse)/n_splits:.2f}")
+print(printstring + f"\nAverage mean squared error for GBM: {-sum(CVmse)/n_splits:.2f}")
 ```
 
 The first thing we observe right off the bat is how fast these algorithms were trained. This can be explained with the low number of estimators we used. We couldn't use more than 80 as the training phase produced overflow errors. The other very promising thing is the low cross-validation error of the selected model. We will see in the last part if this model is robust to overfitting.  
