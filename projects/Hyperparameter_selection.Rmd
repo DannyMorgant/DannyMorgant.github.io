@@ -196,8 +196,8 @@ grid['max_depth'] = [2, 3, 5, 8, 12]
 grid['min_samples_leaf'] = [2, 3, 4]
 
 # Creating the particles
-creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
-creator.create("Particle", list, fitness=creator.FitnessMin, speed=list, 
+creator.create("FitnessMax", base.Fitness, weights=(1.0,)) # Max because using -MSE
+creator.create("Particle", list, fitness=creator.FitnessMax, speed=list, 
     smin=None, smax=None, best=None, grid=grid)
 
 
@@ -221,12 +221,13 @@ def scale_back(x, label, type="linear"):
 
 def evaluate_rf(part):
     # Extracting particle parameters
-    n_estimators = scale_back(part[0], "n_estimators", type="log")
-    max_features = scale_back(part[1], "max_features")
-    max_depth = scale_back(part[2], "max_depth")
-    min_samples_leaf = scale_back(part[3], "min_samples_leaf")
+    params = {}
+    params["n_estimators"] = scale_back(part[0], "n_estimators", type="log")
+    params["max_features"] = scale_back(part[1], "max_features")
+    params["max_depth"] = scale_back(part[2], "max_depth")
+    params["min_samples_leaf"] = scale_back(part[3], "min_samples_leaf")
     # Evaluating the model
-    model_rf = RandomForestRegressor()
+    model_rf = RandomForestRegressor(**params)
     return sum(cross_val_score(model_rf, X0, y0, cv=kfold, 
                                scoring='neg_mean_squared_error', n_jobs=-1))/n_splits,
 
@@ -252,13 +253,16 @@ def updateParticle(part, best, phi1, phi2):
 ```
 
 ```{python, comment=NA}
+GEN = 25
+POP = 15
+
 toolbox = base.Toolbox()
 toolbox.register("particle", generate, size=4, smin=-0.3, smax=0.3)
 toolbox.register("population", tools.initRepeat, list, toolbox.particle)
 toolbox.register("update", updateParticle, phi1=2.0, phi2=2.0)
 toolbox.register("evaluate", evaluate_rf)
 
-pop = toolbox.population(n=15)
+pop = toolbox.population(n=POP)
 stats = tools.Statistics(lambda ind: ind.fitness.values)
 stats.register("avg", np.mean)
 stats.register("std", np.std)
@@ -268,18 +272,15 @@ stats.register("max", np.max)
 logbook = tools.Logbook()
 logbook.header = ["gen", "evals"] + stats.fields
 
-GEN = 25
 best = None
-
 tic = time.time()
-
 for g in range(GEN):
     for part in pop:
         part.fitness.values = toolbox.evaluate(part)
-        if not part.best or part.best.fitness > part.fitness:
+        if not part.best or part.best.fitness < part.fitness:
             part.best = creator.Particle(part)
             part.best.fitness.values = part.fitness.values
-        if not best or best.fitness > part.fitness:
+        if not best or best.fitness < part.fitness:
             best = creator.Particle(part)
             best.fitness.values = part.fitness.values
     for part in pop:
@@ -298,7 +299,7 @@ for k, v in rf_params.items(): print(f"\t{k}: {v}")
 print("With associated mean squared error:", -pd.DataFrame(logbook)["max"].max())
 ```
 
-PSO performs the best: it is both quite fast to find good regions of the search space and spends a lot of time exploring around the local minimas. As a result, not many iterations are necessary and the algorithm becomes quite fast. It also outperformed grid-search, which is somewhat counterintuitive at first as we could expect grid search to behave kind of like a brute-force search. It happens that the exploration performed by grid search is actually very inefficient. This result is particularly impressive as we used close to the most naive implementation of PSO. the only thing we added to the most naive approach is a decay factor on the speed of particles, so that they gravitate closer and closer to the local minimas as the generation increases. We might consider researching more on this approach in the future.   
+PSO performs the best: it is both quite fast to find good regions of the search space and spends a lot of time exploring around the local minimas. As a result, not many iterations are necessary to find a decent solution, and it can still be run longer to keep improving it. It also outperformed grid-search, which is somewhat counterintuitive at first as we could expect grid search to behave kind of like a brute-force search. It happens that the exploration performed by grid search is actually very inefficient. This result is particularly impressive as we used close to the most naive implementation of PSO. the only thing we added to the most naive approach is a decay factor on the speed of particles, so that they gravitate closer and closer to the local minimas as the generation increases. We might consider researching more on this approach in the future.   
 
 #### Impact of hyperparameters  
 
