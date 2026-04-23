@@ -3,3 +3,4 @@ jekyll_start.sh
 .Rhistory
 *.ipynb
 *.xls
+*.token
