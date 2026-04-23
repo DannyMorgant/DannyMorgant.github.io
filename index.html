@@ -1,23 +1,152 @@
----
----
 <!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" type="text/css" href="styles/global_style.css" />
-    <title>Danny Morgant</title>
+    <title>Organisation Vacances</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            max-width: 900px;
+        }
+        h1, h2 {
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 5px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 30px;
+        }
+        th, td {
+            border: 1px solid #ccc;
+            padding: 8px;
+            text-align: center;
+        }
+        th {
+            background-color: #f0f0f0;
+        }
+        .section {
+            margin-bottom: 40px;
+        }
+        .proposition {
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 15px;
+        }
+        .price {
+            font-weight: bold;
+            color: #2a7;
+        }
+    </style>
 </head>
 <body>
-    <div id="container">
-        {% include sidebar.html %}
-        <div id="content">
-            <p>Passionné par les domaines des mathématiques, de la statistique, de la data science et de la gestion des risques financiers, mon parcours professionnel se distingue par une transition significative : en 2010, j'ai obtenu un diplôme de Master en chimie de synthèse, suivi d'une année de recherche en laboratoire. Cette expérience a façonné mon approche vis-à-vis des défis réels, mettant en lumière l'importance de traduire la théorie en applications concrètes.</p>
-            <p>Actuellement, je suis en phase d'obtention d'un Master en Ingénierie des Risques Économiques et Financiers (IREF), où j'ai approfondi mes compétences en mathématiques appliquées, en statistiques, en data science et en gestion des risques financiers. Mon objectif ultime est de mettre en pratique ces compétences pour résoudre des problèmes concrets dans les domaines passionnants de la finance quantitative, de la data science et de la gestion des risques.</p>
-            <p>Ma transition professionnelle a été guidée par une mentalité "réalité d'abord" que j'ai cultivée grâce à ma formation de chimiste. Mon approche proactive et quantitative constitue un atout précieux que je mets au service de la résolution de problèmes complexes.</p>
-            <p>Je suis en permanence à la recherche de nouvelles opportunités de collaboration avec des professionnels partageant des objectifs similaires et des projets stimulants qui me permettent de continuer à élargir mes connaissances.</p>
-        </div>
+
+    <h1>Organisation des Vacances</h1>
+
+    <!-- Tableau participants -->
+    <div class="section">
+        <h2>Participants</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Qui ?</th>
+                    <th>Adultes</th>
+                    <th>Enfants</th>
+                    <th>Statut</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Danny</td>
+                    <td>1</td>
+                    <td>0</td>
+                    <td>Confirmé, pas d'attente</td>
+                </tr>
+                <tr>
+                    <td>Laure</td>
+                    <td>2</td>
+                    <td>0</td>
+                    <td>Confirmé, pas d'attente</td>
+                </tr>
+                <tr>
+                    <td>Toinou</td>
+                    <td>1</td>
+                    <td>0</td>
+                    <td>Pas confirmé</td>
+                </tr>
+                <tr>
+                    <td>Alex</td>
+                    <td>1</td>
+                    <td>0</td>
+                    <td>Pas confirmé</td>
+                </tr>
+                <tr>
+                    <td>Vince</td>
+                    <td>1</td>
+                    <td>0</td>
+                    <td>Confirmation attendue lundi 27/04</td>
+                </tr>
+                <tr>
+                    <td>Guillaume</td>
+                    <td>2</td>
+                    <td>0</td>
+                    <td>Attente de confirmation pour présence et semaine.</td>
+                </tr>
+                <tr>
+                    <td>Anaïs</td>
+                    <td>2</td>
+                    <td>1 ou 2</td>
+                    <td>Confirmé, pas d'attente</td>
+                </tr>
+                <tr>
+                    <td>Martin</td>
+                    <td>1</td>
+                    <td>0</td>
+                    <td>Pas confirmé</td>
+                </tr>
+            </tbody>
+        </table>
     </div>
+
+    <!-- Section décidé -->
+    <div class="section">
+        <h2>Décidé</h2>
+        <ul>
+            <li>Date : 1° ou 2° semaine d'août. Le choix de la semaine va dépendre de la réponse de Guillaume</li>
+        </ul>
+    </div>
+
+    <!-- Section infos -->
+    <div class="section">
+        <h2>Infos</h2>
+        <ul>
+            <li>Destination : non décidé</li>
+            <li>Prix : pas encore d'estimation, je vais faire dans les prochains jours pour avoir vos réactions et ajuster.</li>
+            <li>Notes diverses : ...</li>
+        </ul>
+    </div>
+
+    <!-- Section propositions -->
+    <div class="section" style="display: none">
+        <h2>Propositions</h2>
+        <div class="proposition">
+            <p><strong>Lien :</strong> 
+                <a href="https://example.com" target="_blank">Voir l'offre</a>
+            </p>
+            <p><strong>Description :</strong> Appartement proche mer, 3 chambres.</p>
+            <p class="price">Prix : 1200€ / semaine</p>
+        </div>
+
+        <div class="proposition">
+            <p><strong>Lien :</strong> 
+                <a href="https://example.com" target="_blank">Voir l'offre</a>
+            </p>
+            <p><strong>Description :</strong> Maison avec piscine, capacité 8 personnes.</p>
+            <p class="price">Prix : 1500€ / semaine</p>
+        </div>
+
+    </div>
+
 </body>
 </html>
-
